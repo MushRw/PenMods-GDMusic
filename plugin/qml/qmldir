@@ -1,0 +1,17 @@
+singleton Theme 1.0 Theme.qml
+singleton MediaBridge 1.0 MediaBridge.qml
+
+Toast 1.0 components/Toast.qml
+TitleBar 1.0 components/TitleBar.qml
+IconButton 1.0 components/IconButton.qml
+SettingRow 1.0 components/SettingRow.qml
+VirtualKeyboardInput 1.0 components/VirtualKeyboardInput.qml
+
+SearchPage 1.0 pages/SearchPage.qml
+PlayerPage 1.0 pages/PlayerPage.qml
+SettingsPage 1.0 pages/SettingsPage.qml
+LocalPage 1.0 pages/LocalPage.qml
+MatchPage 1.0 pages/MatchPage.qml
+PlaylistPage 1.0 pages/PlaylistPage.qml
+PlaylistDetailPage 1.0 pages/PlaylistDetailPage.qml
+AddToPlaylistPage 1.0 pages/AddToPlaylistPage.qml

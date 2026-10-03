@@ -1,0 +1,1 @@
+mkdir -p /tmp/audio_wakelocks; i=0; while [ $i -lt 15 ]; do if [ -S /tmp/gdmusic.sock ]; then p=$(LC_ALL=C '/userdisk/PenMods/plugins/gdmusic/bin/gdipc.pl' '/tmp/gdmusic.sock' pid 2>/dev/null); case "$p" in ''|ERR*) ;; *) printf '%s' "$p" > /tmp/audio_wakelocks/gdmusic.lock; break;; esac; fi; i=$((i+1)); sleep 1; done; true

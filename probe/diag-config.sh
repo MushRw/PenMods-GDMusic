@@ -1,0 +1,52 @@
+#!/bin/sh
+# 验证「mpv 配置（lua/hwdec）导致播放卡死」的假设：用 --no-config 对比
+set -u
+HOST=music-api.gdstudio.xyz
+IPC=/userdisk/PenMods/plugins/gdmusic/bin/gdipc.pl
+IPS="104.18.0.1 104.17.0.1 104.19.0.1"
+
+api() {
+    for ip in $IPS; do
+        r=$(LC_ALL=C curl -s --max-time 10 -A 'Mozilla/5.0' --resolve "$HOST:443:$ip" "https://$HOST/api.php?$1" 2>/dev/null)
+        case "$r" in "["*|"{"*) printf '%s' "$r"; return 0;; esac
+    done
+    return 1
+}
+
+pkill -f '[i]nput-ipc-server=' 2>/dev/null
+pkill -f '[u]serdisk/mpv' 2>/dev/null
+sleep 1
+
+U=""
+for id in 2652820720 2668397359 210049 509781655; do
+    u=$(api "types=url&source=netease&id=$id&br=320" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+    [ -n "$u" ] && { U="$u"; echo "命中 id=$id"; break; }
+done
+[ -z "$U" ] && { echo "无可用 url"; exit 1; }
+
+run() {
+    label="$1"; tag="$2"; shift 2
+    SOCK="/tmp/gd_$tag.sock"
+    rm -f "$SOCK" /tmp/c_$tag.log
+    echo "== $label =="
+    nohup /userdisk/mpv/mpv --no-video --force-window=no --idle=yes --volume=80 \
+          --input-ipc-server="$SOCK" "$@" "$U" >/tmp/c_$tag.log 2>&1 &
+    i=0; while [ $i -lt 60 ]; do [ -S "$SOCK" ] && break; i=$((i+1)); sleep 0.25; done
+    sleep 7
+    printf "   t1 "; LC_ALL=C "$IPC" "$SOCK" cmd get_property time-pos
+    sleep 5
+    printf "   t2 "; LC_ALL=C "$IPC" "$SOCK" cmd get_property time-pos
+    echo "   lua/日志: $(grep -cE 'lua|hwdec|rockchip' /tmp/c_$tag.log) 条"
+    LC_ALL=C "$IPC" "$SOCK" cmd quit >/dev/null 2>&1
+    sleep 1
+    pkill -f "[i]nput-ipc-server=$SOCK" 2>/dev/null
+    rm -f "$SOCK"
+}
+
+run "X: 默认配置（带 config-dir 的 lua/hwdec）" X
+run "Y: --no-config（完全绕开配置）"              Y --no-config
+run "Z: --no-config --aid=1（只音轨）"            Z --no-config --aid=1
+
+echo "== 对比结论 =="
+echo "  若 Y/Z 的 t1→t2 有增长而 X 没有，即证实是配置导致卡死"
+echo "== 结束 =="
