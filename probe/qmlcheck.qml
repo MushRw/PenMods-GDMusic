@@ -205,19 +205,32 @@ Item {
                         + " head=" + r.searchHistory[0] + " (期望 w29)")
 
             // ============================================================
-            // 音源：只留 API 实际接受的三个（2026-10-01 设备实测）
+            // 音源：只留网易云（2026-10-03 起。joox / bilibili 能搜不能播，已从
+            // 列表移除；切源代码路径保留，见 main.qml 的 sources 注释）
             // ============================================================
             var ids = []
             for (var si = 0; si < r.sources.length; si++) ids.push(r.sources[si].id)
-            console.log("CHK srcList=" + JSON.stringify(ids) + " (期望 3 个)")
+            console.log("CHK srcList=" + JSON.stringify(ids) + " (期望 [\"netease\"])")
             console.log("CHK srcValid ok=" + r.isValidSource("netease")
                         + "/" + r.isValidSource("joox")
-                        + "/" + r.isValidSource("bilibili") + " (期望 true×3)")
+                        + "/" + r.isValidSource("bilibili") + " (期望 true/false/false)")
             // 已下线的音源必须判为无效，否则老存档会让插件每次开机都固定搜不到歌
             console.log("CHK srcValid dead=" + r.isValidSource("tencent")
                         + "/" + r.isValidSource("kuwo")
                         + "/" + r.isValidSource("kugou") + " (期望 false×3)")
             console.log("CHK srcCur=" + r.source + " (期望 netease)")
+
+            // 老存档回归（2026-10-03 音源缩到只剩网易云后新增）：
+            // 设备上可能存着已从列表移除的音源 ⇒ 读盘时必须回落，否则 sourceLabel()
+            // 会显示一个列表里根本没有的音源，而且搜索恒失败、用户只会觉得"插件坏了"。
+            // 直接给属性赋脏值再存盘（绕开 setSource 的校验）来模拟旧版留下的存档。
+            var keepSrc = r.source
+            r.source = "joox"
+            r.saveSettings()
+            r.loadSettings()
+            console.log("CHK srcFallback=" + r.source + " (期望 netease)")
+            r.source = keepSrc
+            r.saveSettings()
 
             // ============================================================
             // 顶部标签：搜索 ↔ 本地 两个平级页面，点标签必须真的翻转 page

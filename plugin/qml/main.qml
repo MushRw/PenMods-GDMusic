@@ -90,25 +90,26 @@ Item {
     readonly property string lrcMark:       "@@GMLRC@@"  // 扫描输出里标记「这行是个歌词文件名」
 
     // ================= 音源 / 音质 =================
-    // ⚠️ 这份列表是 2026-10-01 在设备上**逐个实测**出来的，不是照文档抄的。
-    // 实测方法：对每个 source 发一次 types=search，再看是否被拒。
+    // 2026-10-03：**只保留网易云**。下面是 2026-10-01 在设备上**逐个实测**出来的结论，
+    // 不是照文档抄的（实测方法：对每个 source 发一次 types=search，再发一次 types=url）。
     //
-    //   netease  ✅ 接受，且 types=url 能拿到真实播放地址 → 唯一能播的
-    //   joox     ✅ 接受，但 types=url 恒返回 {"url":"","br":-1}（JOOX 是海外服务，国内 IP 取不到流）
-    //   bilibili ✅ 接受，但 types=url 同样恒空（B站取流要登录态）
-    //   kuwo     ❌ {"detail":"Value of `source` is not supported."}
-    //   tencent  ❌ 同上
-    //   kugou / migu / xiami ❌ 同上
+    //   netease  ✅ 搜索被接受，且 types=url 能拿到真实播放地址 → 唯一能播的
+    //   joox     ⚠️ 能搜到，但 types=url 恒返回 {"url":"","br":-1}
+    //                （JOOX 是海外服务，国内 IP 取不到流）
+    //   bilibili ⚠️ 能搜到，types=url 同样恒空（B 站取流要登录态）
+    //   kuwo / tencent / kugou / migu / xiami ❌ 连搜索都直接拒：
+    //                {"detail":"Value of `source` is not supported."}
     //
-    // 📌 两处已知陷阱：
-    //   1) GD 官网（api.php 首页）写「当前稳定音乐源：netease、kuwo、joox」，更新日期 2026-02-06
-    //      —— 但酷我此刻实测**已不支持**，文档没跟上。别信文档，信实测。
-    //   2) 「能搜」≠「能播」。joox / bilibili 会正常返回搜索结果，点下去却没声音，
-    //      失败点在取流而不是搜索，排查时别在搜索层找原因。
+    // 📌 陷阱：「能搜」≠「能播」。joox / bilibili 会正常返回搜索结果，点下去却没声音，
+    //    失败点在取流（types=url）而不是搜索，排查时别在搜索层找原因。
+    //    另：GD 官网（api.php 首页）写「当前稳定音乐源：netease、kuwo、joox」，
+    //    但酷我实测已不支持 —— 别信文档，信实测。
+    //
+    // ⛔ 切源的**代码路径全部保留**（cycleSource / setSource / 搜索页那个 Repeater）：
+    //    以后 GD 音乐台恢复了别的音源，把条目加回这个数组就能用，不必改逻辑。
+    //    老存档里残留的 joox / bilibili 由 isValidSource() 兜底回落（见 loadSettings）。
     readonly property var sources: [
-        { id: "netease",  label: "网易云" },
-        { id: "joox",     label: "JOOX" },
-        { id: "bilibili", label: "B站" }
+        { id: "netease",  label: "网易云" }
     ]
     readonly property var qualityList: ["128", "192", "320", "740", "999"]
 
@@ -1126,7 +1127,9 @@ Item {
         if (q && q.list && q.list.length) {
             queue = q.list
             queueIndex = (q.index >= 1) ? (q.index - 1) : -1
-            if (q.source)  source = q.source
+            // 队列存档里可能带旧音源（joox / bilibili 已从 sources 移除）⇒ 先校验再采纳，
+            // 否则 sourceLabel() 会显示一个列表里根本不存在的音源。
+            if (q.source && isValidSource(q.source)) source = q.source
             if (q.quality) quality = q.quality
         }
         if (!n) {
@@ -3084,6 +3087,9 @@ Item {
     }
 
     function setSource(id) {
+        // 只接受列表内的 id。切源入口只有搜索页那个 Repeater，本来就只给列表内的值，
+        // 但挡一道脏值能让"以后把别的音源加回来"时不必再担心存档里混进不认识的值。
+        if (!isValidSource(id)) return
         source = id
         saveSettings()
         toast.show("音源：" + sourceLabel())
