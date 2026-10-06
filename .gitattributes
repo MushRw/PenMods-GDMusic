@@ -1,0 +1,11 @@
+# 这个仓库里的 .sh / .qml / .js / .lua 都要**推到设备的 Linux 上直接跑**。
+# 一旦某个文件被存成 CRLF，shebang 就变成 "#!/bin/sh\r"，设备上只报一句
+# "not found"——看不出是行尾问题。
+#
+# 本机 PortableGit 的**系统级** gitconfig 带着 core.autocrlf=true（不是本仓库设的，
+# 也不是 git config --global 能覆盖的），所以只靠默认策略迟早会踩。
+* text=auto eol=lf
+
+# 二进制资源：明确按二进制处理，别让 text=auto 去做换行转换
+*.png  binary
+*.zip  binary
