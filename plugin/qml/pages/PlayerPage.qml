@@ -171,6 +171,18 @@ Rectangle {
             onClicked: if (playerPage.controller)
                        playerPage.controller.openAddPick(playerPage.controller.currentSong)
         }
+
+        // 播放队列（当前播放列表）—— 整个插件里唯一通往队列页的入口。
+        // 放在最末：它是"离开本页去看列表"的出口，与前面的播控/加歌不是同一类动作，
+        // 摆在最远端能降低误触。
+        Components.IconButton {
+            objectName: "gdPlayerQueueBtn"
+            kind: "queue"
+            // 队列里有多首时才高亮：只有一首的话，点进去既没得看也没处跳。
+            tint: (playerPage.controller && playerPage.controller.queue
+                   && playerPage.controller.queue.length > 1) ? Theme.accent : Theme.textSub
+            onClicked: if (playerPage.controller) playerPage.controller.openQueue()
+        }
     }
 
     // ---------- （原音量条位置：已移除）----------

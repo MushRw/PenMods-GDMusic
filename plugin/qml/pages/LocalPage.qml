@@ -21,6 +21,8 @@ Rectangle {
         // 本地页同样是根页面：返回 = 退出插件，回搜索页请用顶部的「搜索」标签。
         // （两个标签页的返回行为必须一致，否则用户会搞不清自己在哪一层）
         onBackClicked: if (localPage.controller) localPage.controller.exitPlugin()
+        showPlayer: localPage.controller ? localPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (localPage.controller) localPage.controller.gotoPlayer()
         onSettingsClicked: if (localPage.controller) localPage.controller.openSettings()
         onTabClicked: {
             if (!localPage.controller) return

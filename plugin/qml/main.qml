@@ -3252,6 +3252,21 @@ Item {
     }
     // 下拉面板的音乐卡片被点开时，由 MediaBridge 调回来（页面还活着的情况）
     function openPlayer() { gotoPlayer() }
+
+    // ---------- 队列页（当前播放列表）----------
+    // 判据用 currentSong 而不是 playing：**停播之后也应该能回到播放页**
+    // （否则停在最后一首时 ▶ 会突然消失，看着像 bug）。currentSong 只在开播时赋值、
+    // 从不清空，正好是"这次会话播过歌"的意思。
+    property bool hasNowPlaying: currentSong !== null
+    // 队列页是播放页的下游，返回一律回播放页 —— 不单独记"来处"，
+    // 省一个状态变量就少一处能自污染的地方（backPage 那次事故就是这么来的）。
+    function openQueue() { page = "queue" }
+    function goQueueBack() { gotoPlayer() }
+    // 点队列里的某一首：直接跳播，并带回播放页（与主流播放器一致，点完就能看到封面/歌词）
+    function playQueueAt(i) {
+        startAt(i)
+        page = "player"
+    }
     // 给子页面用的提示接口 —— 子文件里访问不到 main.qml 的 `toast` id
     // （QML 的 id 作用域是单文件内），所以由 controller 转发。
     function toastMsg(msg) { toast.show(msg) }
@@ -3601,6 +3616,13 @@ Item {
     Pages.LoginPage {
         id: loginPage
         visible: root.page === "login"
+        controller: root
+    }
+
+    // 队列页（当前播放列表）。声明在最后 = 压在所有页面之上。
+    Pages.QueuePage {
+        id: queuePage
+        visible: root.page === "queue"
         controller: root
     }
 }

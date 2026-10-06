@@ -39,6 +39,8 @@ Rectangle {
         showTabs: false
         // 返回 = 回本地页（不是退出插件）—— 本页是本地页的下级
         onBackClicked: if (matchPage.controller) matchPage.controller.closeMatch()
+        showPlayer: matchPage.controller ? matchPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (matchPage.controller) matchPage.controller.gotoPlayer()
     }
 
     // ---------- 搜索行：点输入框唤起键盘（预填的搜索词已在里面） ----------

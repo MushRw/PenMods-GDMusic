@@ -24,6 +24,9 @@ Rectangle {
         tabLabels: ["搜索", searchPage.controller ? searchPage.controller.dlTabLabel : "本地", "歌单"]
         // 搜索页是本插件的根页面，返回箭头 = 退出插件（框架约定 backButtonClicked）。
         onBackClicked: if (searchPage.controller) searchPage.controller.exitPlugin()
+        // ▶ 回到正在播放：播过歌之后任何页面都能一步回去（详见 main.qml 的 hasNowPlaying）
+        showPlayer: searchPage.controller ? searchPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (searchPage.controller) searchPage.controller.gotoPlayer()
         onSettingsClicked: if (searchPage.controller) searchPage.controller.openSettings()
         onTabClicked: {
             if (!searchPage.controller) return

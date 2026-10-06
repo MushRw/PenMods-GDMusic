@@ -13,7 +13,7 @@ Rectangle {
     border.color: Theme.line
     border.width: 1
 
-    property string kind: "play"        // play | pause | prev | next | download | plus
+    property string kind: "play"        // play | pause | prev | next | download | queue | plus
     property color tint: Theme.text
     signal clicked()
 
@@ -69,6 +69,15 @@ Rectangle {
                 ctx.stroke();
                 ctx.beginPath();
                 ctx.moveTo(4.5, 15.5); ctx.lineTo(15.5, 15.5);
+                ctx.stroke();
+            } else if (k === "queue") {
+                // 三条横线 = 播放队列。放在 y=5.5/10/14.5 而不是更密：20px 的画布上
+                // 三条线若挤得太近，在 320×170 的小屏上会糊成一坨看不出是列表。
+                ctx.strokeStyle = btn.tint;
+                ctx.beginPath();
+                ctx.moveTo(4.5, 5.5);  ctx.lineTo(15.5, 5.5);
+                ctx.moveTo(4.5, 10);   ctx.lineTo(15.5, 10);
+                ctx.moveTo(4.5, 14.5); ctx.lineTo(15.5, 14.5);
                 ctx.stroke();
             } else if (k === "plus") {
                 // 十字（加入歌单）。用 Canvas 而不是 Text "＋"：设备字体里全角符号

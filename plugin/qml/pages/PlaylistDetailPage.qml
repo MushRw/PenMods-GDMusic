@@ -32,6 +32,8 @@ Rectangle {
         showTabs: false
         // 返回 = 回歌单列表（本页是歌单页的下级），不是退出插件
         onBackClicked: if (detailPage.controller) detailPage.controller.closePlaylistDetail()
+        showPlayer: detailPage.controller ? detailPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (detailPage.controller) detailPage.controller.gotoPlayer()
     }
 
     // ---------- 工具行：播放全部 + 类型 ----------

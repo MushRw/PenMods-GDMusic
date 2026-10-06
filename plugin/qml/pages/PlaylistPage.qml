@@ -49,6 +49,8 @@ Rectangle {
         tabLabels: ["搜索", plPage.controller ? plPage.controller.dlTabLabel : "本地", "歌单"]
         // 歌单页和搜索页/本地页一样是根页面：返回 = 退出插件。回别的页请用顶部标签。
         onBackClicked: if (plPage.controller) plPage.controller.exitPlugin()
+        showPlayer: plPage.controller ? plPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (plPage.controller) plPage.controller.gotoPlayer()
         onSettingsClicked: if (plPage.controller) plPage.controller.openSettings()
         onTabClicked: {
             if (!plPage.controller) return

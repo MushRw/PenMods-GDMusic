@@ -16,6 +16,8 @@ Rectangle {
         title: "设置"
         showSettings: false
         onBackClicked: if (settingsPage.controller) settingsPage.controller.goBack()
+        showPlayer: settingsPage.controller ? settingsPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (settingsPage.controller) settingsPage.controller.gotoPlayer()
     }
 
     Flickable {

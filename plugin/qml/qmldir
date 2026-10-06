@@ -15,3 +15,4 @@ MatchPage 1.0 pages/MatchPage.qml
 PlaylistPage 1.0 pages/PlaylistPage.qml
 PlaylistDetailPage 1.0 pages/PlaylistDetailPage.qml
 AddToPlaylistPage 1.0 pages/AddToPlaylistPage.qml
+QueuePage 1.0 pages/QueuePage.qml

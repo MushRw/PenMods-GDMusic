@@ -57,6 +57,8 @@ Rectangle {
         showBack: true
         showSettings: false
         onBackClicked: if (loginPage.controller) loginPage.controller.goBack()
+        showPlayer: loginPage.controller ? loginPage.controller.hasNowPlaying : false
+        onPlayerClicked: if (loginPage.controller) loginPage.controller.gotoPlayer()
     }
 
     // ---------- 未登录：左侧二维码 + 右侧状态与按钮（左右分置） ----------

@@ -11,6 +11,11 @@ Rectangle {
     property bool showSettings: true
     property bool showLocal: false
 
+    // 「回到正在播放」：播过歌之后，所有页面都能一步回到播放页。
+    // 2026-10-06 补 —— 在此之前播放页**没有任何常驻入口**，离开播放页后只能
+    // 「重新点一首歌播一遍」才回得去，主观感受就是"播放页打不开"。
+    property bool showPlayer: false
+
     // 顶部并列标签：搜索页与本地页是平级的两个根页面，用标签直接互切，
     // 不再靠右上角一个像"下载"的图标进去、再按返回键出来。
     // 塞在 TitleBar 里而不是另起一行 —— 320×170 上多一行 22px 就要吃掉半首歌的列表高度。
@@ -22,6 +27,7 @@ Rectangle {
     signal settingsClicked()
     signal localClicked()
     signal tabClicked(int index)
+    signal playerClicked()
 
     // 返回
     Rectangle {
@@ -67,57 +73,113 @@ Rectangle {
         visible: !bar.showTabs
     }
 
-    Row {
-        id: tabRow
-        objectName: "gdTabRow"
-        anchors.centerIn: parent
-        spacing: 4
-        visible: bar.showTabs
+    // 🔴 标签不再是「整条 TitleBar 居中」，而是在【返回键】与【右侧按钮组】之间的
+    //    可用区里居中。原先三个 58px 标签居中占 69..251，加一个 ▶ 之后按钮组就从
+    //    252 开始 —— 只剩 1px 间隙，看着像粘在一起，再挤一个按钮必然压上去。
+    //    anchors 到 left/right 而不是 centerIn parent，以后加减按钮都不必重算任何坐标。
+    Item {
+        id: tabHost
+        anchors.left: parent.left
+        anchors.leftMargin: (bar.showBack ? 34 : 4) + 4
+        anchors.right: rightBtns.left
+        anchors.rightMargin: 4
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
 
-        Repeater {
-            model: bar.tabLabels
-            delegate: Rectangle {
-                width: 58; height: 21
-                radius: Theme.radius
-                color: (index === bar.tabIndex) ? Theme.accent
-                                                : (tArea.pressed ? Theme.cardHi : Theme.card)
-                border.color: (index === bar.tabIndex) ? Theme.accent : Theme.line
-                border.width: 1
+        Row {
+            id: tabRow
+            objectName: "gdTabRow"
+            anchors.centerIn: parent
+            spacing: 4
+            visible: bar.showTabs
 
-                Text {
-                    anchors.centerIn: parent
-                    // 限定宽度 + elide：标签文字是外面传进来的，「本地(↓12)」这种
-                    // 带角标的会长过 58px 的标签盒，不夹住就会**溢出到相邻标签上**，
-                    // 看起来像两个标签的标题串在一起。
-                    width: parent.width - 6
-                    horizontalAlignment: Text.AlignHCenter
-                    text: modelData
-                    color: (index === bar.tabIndex) ? "#FFFFFF" : Theme.textSub
-                    font.pixelSize: Theme.pxSmall
-                    font.bold: (index === bar.tabIndex)
-                    elide: Text.ElideRight
-                }
-                MouseArea {
-                    id: tArea
-                    anchors.fill: parent
-                    onClicked: bar.tabClicked(index)
+            Repeater {
+                model: bar.tabLabels
+                delegate: Rectangle {
+                    width: 58; height: 21
+                    radius: Theme.radius
+                    color: (index === bar.tabIndex) ? Theme.accent
+                                                    : (tArea.pressed ? Theme.cardHi : Theme.card)
+                    border.color: (index === bar.tabIndex) ? Theme.accent : Theme.line
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        // 限定宽度 + elide：标签文字是外面传进来的，「本地(↓12)」这种
+                        // 带角标的会长过 58px 的标签盒，不夹住就会**溢出到相邻标签上**，
+                        // 看起来像两个标签的标题串在一起。
+                        width: parent.width - 6
+                        horizontalAlignment: Text.AlignHCenter
+                        text: modelData
+                        color: (index === bar.tabIndex) ? "#FFFFFF" : Theme.textSub
+                        font.pixelSize: Theme.pxSmall
+                        font.bold: (index === bar.tabIndex)
+                        elide: Text.ElideRight
+                    }
+                    MouseArea {
+                        id: tArea
+                        anchors.fill: parent
+                        onClicked: bar.tabClicked(index)
+                    }
                 }
             }
         }
     }
 
-    // 本地音乐（下载按钮）：一张软盘/向下的箭头 + 一条底线
-    Rectangle {
-        id: localBox
-        width: 30; height: 28
+    // 右上角按钮组：[正在播放] [本地/下载] [设置]
+    //
+    // 🔴 用 Row 而不是各自算 rightMargin：原先 local 的 margin 得按 settings 显不显示
+    //    二选一地算（showSettings ? 34 : 4），再加第三个按钮就得把老按钮的偏移全部
+    //    手推一遍；更麻烦的是 tabRow 是 anchors.centerIn（三个 58px 标签居中占 182px），
+    //    按钮一多就会**悄悄压到标签上** —— 这种重叠在源码里完全看不出来。
+    //    Row 会自动跳过 invisible 的项，所以将来加减按钮都不必重算任何坐标。
+    //    ⚠️ 顺序刻意排成 [player, local, settings]：player 不显示时剩下两项的相对位置
+    //    与改之前逐像素一致，不动用户的肌肉记忆（设置一直在最右）。
+    Row {
+        id: rightBtns
+        objectName: "gdRightBtns"
         anchors.right: parent.right
-        anchors.rightMargin: (bar.showSettings ? 34 : 4)
+        anchors.rightMargin: 4
         anchors.verticalCenter: parent.verticalCenter
-        radius: Theme.radius
-        color: localArea.pressed ? Theme.line : Theme.card
-        border.color: Theme.line
-        border.width: 1
-        visible: bar.showLocal
+        spacing: 4
+
+        // 正在播放：一步回到播放页
+        Rectangle {
+            width: 30; height: 28
+            radius: Theme.radius
+            color: playArea.pressed ? Theme.line : Theme.card
+            // 描边用 accent：它是这里唯一"通往别处"的按钮，得和静态图标区分开
+            border.color: Theme.accent
+            border.width: 1
+            visible: bar.showPlayer
+
+            Canvas {
+                anchors.centerIn: parent
+                width: 16; height: 16
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    // 实心三角（播放符号）而非线稿 —— 这一排其它图标都是线条，
+                    // 只有填色才看得出来它是"能按的播放"，不会和普通设置项混。
+                    ctx.fillStyle = Theme.accent;
+                    ctx.beginPath();
+                    ctx.moveTo(4.5, 2.5); ctx.lineTo(13, 8); ctx.lineTo(4.5, 13.5);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+            MouseArea { id: playArea; anchors.fill: parent; onClicked: bar.playerClicked() }
+        }
+
+        // 本地音乐（下载按钮）：一张软盘/向下的箭头 + 一条底线
+        Rectangle {
+            id: localBox
+            width: 30; height: 28
+            radius: Theme.radius
+            color: localArea.pressed ? Theme.line : Theme.card
+            border.color: Theme.line
+            border.width: 1
+            visible: bar.showLocal
 
         Canvas {
             anchors.centerIn: parent
@@ -141,35 +203,34 @@ Rectangle {
             }
         }
         MouseArea { id: localArea; anchors.fill: parent; onClicked: bar.localClicked() }
-    }
-
-    // 设置
-    Rectangle {
-        id: setBox
-        width: 30; height: 28
-        anchors.right: parent.right; anchors.rightMargin: 4
-        anchors.verticalCenter: parent.verticalCenter
-        radius: Theme.radius
-        color: setArea.pressed ? Theme.line : Theme.card
-        border.color: Theme.line
-        border.width: 1
-        visible: bar.showSettings
-
-        Canvas {
-            anchors.centerIn: parent
-            width: 16; height: 16
-            onPaint: {
-                var ctx = getContext("2d");
-                ctx.clearRect(0, 0, width, height);
-                ctx.strokeStyle = Theme.text;
-                ctx.lineWidth = 1.6;
-                ctx.lineCap = "round";
-                ctx.beginPath(); ctx.arc(8, 8, 2.6, 0, Math.PI * 2); ctx.stroke();
-                ctx.beginPath(); ctx.arc(8, 8, 6.2, -2.2, -0.9); ctx.stroke();
-                ctx.beginPath(); ctx.arc(8, 8, 6.2, 0.94, 1.6);  ctx.stroke();
-                ctx.beginPath(); ctx.arc(8, 8, 6.2, 2.8, 3.5);  ctx.stroke();
-            }
         }
-        MouseArea { id: setArea; anchors.fill: parent; onClicked: bar.settingsClicked() }
+
+        // 设置
+        Rectangle {
+            id: setBox
+            width: 30; height: 28
+            radius: Theme.radius
+            color: setArea.pressed ? Theme.line : Theme.card
+            border.color: Theme.line
+            border.width: 1
+            visible: bar.showSettings
+
+            Canvas {
+                anchors.centerIn: parent
+                width: 16; height: 16
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    ctx.strokeStyle = Theme.text;
+                    ctx.lineWidth = 1.6;
+                    ctx.lineCap = "round";
+                    ctx.beginPath(); ctx.arc(8, 8, 2.6, 0, Math.PI * 2); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(8, 8, 6.2, -2.2, -0.9); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(8, 8, 6.2, 0.94, 1.6);  ctx.stroke();
+                    ctx.beginPath(); ctx.arc(8, 8, 6.2, 2.8, 3.5);  ctx.stroke();
+                }
+            }
+            MouseArea { id: setArea; anchors.fill: parent; onClicked: bar.settingsClicked() }
+        }
     }
 }

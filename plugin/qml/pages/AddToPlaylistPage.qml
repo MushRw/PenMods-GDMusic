@@ -58,6 +58,9 @@ Rectangle {
             if (pickPage.step === "type") pickPage.controller.addPickStep = "list"
             else                          pickPage.controller.closeAddPick()
         }
+        // 加歌是"去菜里加东西"的操作流，中途被拉去播放页会丢上下文，
+        // 所以这里**刻意不留** ▶ —— 不是漏接。
+        showPlayer: false
     }
 
     // ---------- 来源行：这是哪首歌 ----------

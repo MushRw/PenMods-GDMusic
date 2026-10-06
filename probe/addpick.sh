@@ -353,8 +353,14 @@ check(/objectName:\s*"gdPlayerAddBtn"/.test(ppC), 'F2 播放页加歌按钮没�
 check(/openAddPick\(playerPage\.controller\.currentSong\)/.test(ppC),
       'F3 播放页加歌按钮没传 currentSong')
 check(/k === "plus"/.test(ibC), 'F4 IconButton 不认识 plus（点了画不出图形）')
-check(/plus\|/.test(ibC.replace(/[^|]/g, '')) || /play \| pause \| prev \| next \| download \| plus/.test(ibC),
-      'F5 IconButton 的 kind 注释没更新 plus（后面加按钮的人会漏掉）')
+// ⚠️ 不要写死注释字符串去比对（原写法钉住 "play | pause | ... | plus"，
+//    2026-10-06 加 queue 时立刻假失败一次）。改成从【实际支持的分支】反推：
+//    凡是有绘制分支的 kind，注释里必须提到 —— 语义不变，但以后加图标不用改探针。
+const declared = [...ibC.matchAll(/k === "([a-z]+)"/g)].map(m => m[1])
+const kindLine = (ibC.match(/property string kind:[^\n]*/) || [''])[0]
+const missingKind = declared.filter(k => kindLine.indexOf(k) < 0)
+check(missingKind.length === 0 && declared.length > 0,
+      'F5 IconButton 的 kind 注释漏了 [' + missingKind.join(' ') + ']（后面加按钮的人会漏掉）')
 
 // 三处长按
 check(/onPressAndHold:/.test(lpC) && /openAddPick\(localPage\.controller\.localList\[index\]\)/.test(lpC),
