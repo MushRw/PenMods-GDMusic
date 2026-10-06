@@ -308,6 +308,37 @@ Item {
             var dD = r.parseDlDump("")
             console.log("CHK dlparse D n=" + dD.length + " (期望 0)")
 
+            // ============================================================
+            // 播放页返回「回到来处」（2026-10-06 修，审计项 A）
+            // ⚠️ 这三个用例的顺序不能换：playerBackPage 是「进入前」记一次的，
+            //    测完一个场景必须复位，否则下一个场景会读到上一个的残留。
+            // ============================================================
+            r.page = "playlists"
+            r.gotoPlayer()
+            console.log("CHK pback inPage=" + r.page
+                        + " (期望 player，进入即切页)")
+            r.page = "player"          // 模拟播放页内的连点/二次触发
+            r.gotoPlayer()
+            console.log("CHK pback noSelfOverwrite=" + r.playerBackPage
+                        + " (期望 playlists，已在播放页时不把自己记成来处)")
+            r.goPlayerBack()
+            console.log("CHK pback fromPlaylist=" + r.page + " (期望 playlists)")
+
+            r.page = "local"
+            r.gotoPlayer()
+            r.goPlayerBack()
+            console.log("CHK pback fromLocal=" + r.page + " (期望 local)")
+
+            // 退化路径：来处为空 / 被污染成 player ⇒ 回搜索页，而不是"返回了但没动"
+            r.playerBackPage = ""
+            r.page = "player"
+            r.goPlayerBack()
+            console.log("CHK pback emptyFallback=" + r.page + " (期望 search)")
+            r.playerBackPage = "player"   // 自守卫：万一将来有入口忘了排除 player
+            r.page = "player"
+            r.goPlayerBack()
+            console.log("CHK pback selfGuard=" + r.page + " (期望 search)")
+
             Qt.quit()
         }
     }

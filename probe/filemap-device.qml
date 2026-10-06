@@ -144,8 +144,22 @@ Item {
                 it.localList = [{ file: OTHER, size: 10 }]
                 it.decorateLocal()
                 ok(it.localList[0].matched === false, "未登记 → matched=false（徽标 ?）")
+                // 🔴 两轮确认（审计 P1-3）：扫描可能是残缺的，"这一轮没扫到" ≠ "文件没了"，
+                //    首次悬空只能标记，否则一次扫描失败就静默抹掉用户的手动匹配关系。
+                it.mapPendingDrop = ({})
                 it.gcFileMap()
-                ok(it.fileMap[RENAMED] === undefined, "文件已不在列表 → GC 清掉悬空登记")
+                ok(it.fileMap[RENAMED] !== undefined, "首次判定悬空 → 只标记不删（1/2）")
+                it.gcFileMap()
+                ok(it.fileMap[RENAMED] === undefined, "连续两轮都悬空 → 才真删（2/2）")
+                // 撤销怀疑：上一轮标记过、这一轮又扫到了 ⇒ 必须复活，不能被下一轮误删
+                it.mapPendingDrop = ({})
+                it.mapPut(OTHER, online, "manual")
+                it.localList = [{ file: RENAMED, size: 10 }]
+                it.gcFileMap()
+                ok(it.fileMap[OTHER] !== undefined, "本轮没扫到 → 先标记，不删")
+                it.localList = [{ file: OTHER, size: 10 }]
+                it.gcFileMap()
+                ok(it.fileMap[OTHER] !== undefined, "这一轮又扫到 → 撤销怀疑，不被误删")
                 it.fileMap = ({ "__keep": { id: "1", source: "netease", t: 1 } })
                 it.localList = []
                 it.gcFileMap()

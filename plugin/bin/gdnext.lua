@@ -361,12 +361,19 @@ local function play_index(i, skipped)
         local fh = io.open(lf, "r")
         if fh then
             fh:close()
+            -- 🔴 本地文件没有「异步取流」那一步，loading 必须在这里自己复位。
+            --    漏了它 loading 就一直挂着：本首播完触发 end-file 时，会命中下面
+            --    「正在取流中，忽略本次推进」，连播当场断掉 —— 症状是「播完一首已下载的
+            --    歌就停住，不会自动播下一首」。在线分支由 api_get 回调负责复位，
+            --    所以只有离线这条路有此症状。（2026-10-06 真机验证时发现）
+            loading = false
             load_and_play(lf)
             log("play_index: 本地文件, path=" .. lf)
             return
         end
         -- index.json 里记录着但文件不在了（被文件管理器删了）→ 按取不到流处理
         log("play_index: 本地文件不存在, path=" .. lf)
+        loading = false
         if can_next then
             play_index(i + 1, skipped + 1)
         else
@@ -405,6 +412,10 @@ end
 register_evt("file-loaded", function()
     -- 新文件真正加载完成，切歌标志复位
     switching = false
+    -- 兜底：既然已经加载成功，说明「异步取流」阶段结束了 —— loading 不该还挂着。
+    -- （本地文件分支没有 api 回调，历史上就是这里漏复位导致连播断掉；放在这里
+    --   以后即便新增别的路径也不会再踩同一个坑。）
+    loading = false
     write_now({ status = "playing" })
     acquire_lock()
     log("file-loaded: index=" .. tostring(index)
