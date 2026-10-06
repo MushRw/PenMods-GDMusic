@@ -249,8 +249,16 @@ Item {
     function finish() {
         ok(imgProbe.status === 1,
            "Image.status === Ready，本地 jpg 真的能显示（读到 " + imgProbe.size + "）")
-        console.log("CHK pass=" + pass + " bad=" + bad)
-        console.log("CHECK DONE")
-        Qt.quit()
+        // ⚠️ 2026-10-05 修两处：
+        //  ① 这里只打 "CHK pass=… bad=…" 又打一行 "CHECK DONE"（**不带 bad 值**），
+        //     而配套 sidecar-device.sh 是在**文本层** grep "bad=0" 来判定的 ——
+        //     ⇒ 依赖 shell 必然漏判，探针自己也不报数。
+        //     改成与其它 *-device.qml 一致的 "CHECK DONE pass=… bad=…" 格式。
+        //  ② 裸 Qt.quit() 等价 Qt.quit(0)：**失败也返回 0** ⇒ 整条退出码通道是断的，
+        //     任何"bad>0"都不会让 qmlscene 非零退出。照抄 login-device.qml:126-127。
+        console.log("")
+        console.log("CHECK DONE pass=" + pass + " bad=" + bad)
+        if (bad > 0) Qt.quit(1)
+        else Qt.quit(0)
     }
 }

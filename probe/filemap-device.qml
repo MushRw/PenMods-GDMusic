@@ -36,7 +36,7 @@ Item {
 
         onLoaded: {
             var it = ld.item
-            if (!it) { console.log("CHECK FAIL 加载 main.qml 得到空对象"); Qt.quit(); return }
+            if (!it) { console.log("CHECK FAIL 加载 main.qml 得到空对象"); Qt.quit(1); return }
 
             var D = "/userdisk/Music/GDMusic"
             var RENAMED = D + "/断气 - 回春丹 (Live).mp3"
@@ -175,13 +175,17 @@ Item {
             })
 
             console.log("CHECK DONE pass=" + pass + " bad=" + bad)
-            Qt.quit()
+            // ⚠️ 2026-10-05：裸 Qt.quit() == Qt.quit(0)，失败也返回 0
+            //    ⇒ 整条退出码通道是断的，bad>0 也不会让 qmlscene 非零退出。
+            //    照抄 login-device.qml:126-127（全项目唯一写对的样板）。
+            if (bad > 0) Qt.quit(1)
+            else Qt.quit(0)
         }
 
         onStatusChanged: {
             if (status === Loader.Error) {
                 console.log("CHECK FAIL main.qml 加载失败（Loader.Error）")
-                Qt.quit()
+                Qt.quit(1)
             }
         }
     }

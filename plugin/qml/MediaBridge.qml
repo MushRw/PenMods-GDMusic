@@ -89,10 +89,14 @@ QtObject {
     property var    lyricLines: [] // 页面喂进来的 [{time, text}]
     property string cover:  ""
     property int    lastIndex: -1  // now.json 的 index（1 基）
+    property int    lastQueueLen: 0 // now.json 的 queueLen（lua 一直在写，此前无人消费）
     property double lastPos:   -1
     property double revokedUntil: 0
     property int    tick: 0
     property string lastStatus: ""
+    property string lastReason: ""  // 最近一次停止的 now.json reason；holdSession 靠它决定文案
+    property string lastStopLine: "" // 最近一次停止的文案（fail 时留给保留期在卡片上显示）
+    property string pendingStopLine: "" // 交给 release() 的停止文案（否则会被它覆写掉，见 release）
     property bool   logStarted: false
 
     // --- 停播后的「保留期」（可选，**默认关**）---
@@ -280,9 +284,22 @@ QtObject {
         //    改成进入保留期：卡片留着、▶ 随时接回，holdMs 到点才真正释放。
         if (!o || st === "" || st === "stopped" || st === "idle") {
             lastStatus = (o && st) ? st : "stopped"
-            if (st === "idle") status = "播放器空闲"
-            else if (st === "stopped") status = "已停止 · 可再次播放"
-            else status = "未在播放"
+            // 🔴 reason 必须在这里消费，**不能在 apply() 里**（见 stopText 的注释）。
+            //    release_and_stop 统一把 status 写成 "stopped"，所以只看 st 无法区分
+            //    「播完了」「用户按停的」「连续取不到流」「本地文件被删了」四件事。
+            //    ⚠️ fail 与 user 绝不能搞混：用户按停要说「已停止」，取流失败要说失败，
+            //    否则就是比改前更糟的回归。
+            // ⚠️ pendingStopLine 必须在**每个**分支都显式赋值（含清空）：它只在
+            //    st==="stopped" 时才有意义。若只在 stopped 分支写，那么"先 stopped
+            //    但 owns=false（holdSession 早退，没消费也没清）→ 之后 idle → 再
+            //    owns=true"这条路径会让陈旧的失败原因漏给一次无关的 release()。
+            if (st === "idle") { status = "播放器空闲"; pendingStopLine = "" }
+            else if (st === "stopped") {
+                status = stopText(o)
+                // 交给 holdSession：默认路径下它会 release()，而 release 会把 status
+                // 改成"未在播放"（见那里的注释）。先把文案交给它，避免原因被抹掉。
+                pendingStopLine = status
+            } else { status = "未在播放"; pendingStopLine = "" }
             if (owns && !holdTimer.running) holdSession()
             syncTimer()   // 没会话也没页面 ⇒ 停掉每秒轮询（自举失败时靠这句收尾）
             return
@@ -296,6 +313,13 @@ QtObject {
         }
 
         cancelHold("恢复播放")   // 真的在放了，保留期结束
+        // 🔴 重新放起来了 ⇒ 清空"上一个停止原因"。不清的话，连续两次取流失败时
+        //    第二次的 prevReason 仍是 "fail" ⇒ notifyFailure 被判成"同一状态重复"而
+        //    不再弹 ⇒ **第二首失败用户就看不到提示了**（lua 侧 MAX_SKIP=3，
+        //    连续跳过是常态，不是边缘情况）。清空后每次"失败前正常播过"都能重新弹。
+        lastReason = ""
+        lastStopLine = ""
+        pendingStopLine = ""   // 同上：别让这一次的停止文案漏给下一次无关的 release
         lastStatus = st
 
         // 有内容在放 → 确保持有会话
@@ -342,14 +366,109 @@ QtObject {
             session.position = Math.round(pos * 1000)
         lastIndex = idx
         lastPos = pos
+        // queueLen 落成 state，让 lyricText()（页面喂歌词时也会调）算出同一行文字。
+        var ql = parseInt(o.queueLen, 10)
+        lastQueueLen = isNaN(ql) ? 0 : ql
 
         // 歌词：数组由页面喂进来，当前行在这里按 pos 自己推 ——
         // 这样即使页面已经销毁，歌词行也还在往前走。
-        var line = lyricAt(pos)
-        if (session.mainLyric !== line) session.setLyrics(line, "")
+        // 🔴 走 lyricText() 而不是直接 lyricAt()：setLyrics()（页面喂歌词时）也写同一条
+        //    通道，两边必须算出**同一个字符串**，否则「换歌」瞬间会互相覆盖、
+        //    表现成歌词行抖动/闪烁。歌词尾部的队列余量由这里统一追加。
+        var shown2 = lyricText(pos)
+        if (session.mainLyric !== shown2) session.setLyrics(shown2, "")
 
-        status = (st === "paused") ? "已暂停" : "播放中"
+        // status：playing/paused/loading 三态。stopped/idle 走不到这里
+        // —— onNow 的分支②已经在那里 return 了（reason 在那里消费）。
+        status = (st === "paused") ? "已暂停"
+              : (st === "loading") ? "解析播放地址…"
+              : "播放中"
     }
+
+    // 停止原因的中文文案。**四态必须分开**，语义与 main.qml:1090-1098 保持一致：
+    //   end  → 队列正常播完      （gdnext.lua:334 / :428）
+    //   fail → 没能播出来        （gdnext.lua:368 本地文件丢失 / :393 取不到播放地址）
+    //   user → 用户主动停止      （gdnext.lua:471）
+    //   ""   → 没带 reason 的兜底，按「未在播放」而不是谎称「已停止」
+    //
+    // ⚠️ **fail 优先于 end/user**：取不到流时用户没按停过任何东西，
+    //    显示「已停止」等于告诉他「这是你自己干的」——那正是要修掉的回归。
+    //    localfile 没有独立的 reason 值，它和在线取流失败共用 reason="fail"，
+    //    靠 text 区分（"本地文件已丢失" vs "取不到播放地址"）。
+    //
+    // 🔴 为什么这个函数放在 apply() 之外、且**必须**在 onNow 分支②里调用：
+    //    apply() 只在「声称在放」时被调用（onNow:317），而 release_and_stop 写的
+    //    status 恒为 "stopped" ⇒ 四种 reason 永远不会流经 apply()。
+    //    把逻辑写在 apply() 里就等于什么都没修（草稿 C 就是这个错）。
+    function stopText(o) {
+        if (!o) return "未在播放"
+        var reason = String(o.reason || "")
+        var text   = String(o.text   || "")
+        // 记下 reason 供 holdSession() 判断能不能说「可再次播放」（见那里的注释）
+        var prevReason = lastReason
+        lastReason = reason
+        // o.text 是 lua 侧写好的中文原因，优先采用（它区分了「本地文件已丢失」
+        // 和「取不到播放地址」两种失败）；为空时才退回按 reason 映射。
+        //
+        // 🔴 失败原因必须**送到用户眼前** —— 只把 status 写准是没用的：
+        //    status 在整个 plugin/ 树里没有任何读者（唯一去处是这个文件的日志）。
+        //    更要命的是默认配置（holdOnStop=false）下 holdSession() 会 release()
+        //    ⇒ 会话结束 ⇒ 宿主的音乐卡片直接消失、面板回落 ⇒ 卡片上根本没有
+        //    「那行字」可以承载原因。所以默认路径下**唯一可达的通道是宿主 toast**
+        //    （globalRef.showToast，MediaBridge 是 engine 级 singleton，页面销毁后仍在）。
+        //
+        // ⚠️ 只在「首次转入 fail」那一拍弹：poll() 每秒一拍，失败态会持续很多拍，
+        //    不加这个前态比较就会每秒弹一次 —— 那是比不提示更糟的骚扰。
+        //    判据只用 prevReason（上一次消费到的 reason），**不能再用 lastStatus**：
+        //    调用方在进来之前就已经把 lastStatus 写成 "stopped" 了（onNow 的分②），
+        //    拿它当"上一拍状态"是死条件 —— 那正是本函数第一版的 bug。
+        //    连续失败的第二首能被重新弹，靠的是「开始播时清空 lastReason」（见 onNow 分③）。
+        if (reason === "fail" && prevReason !== "fail")
+            notifyFailure(text);
+        // 记下停止文案：保留期（holdOnStop=true，卡片还在）要用它在卡片歌词行上显示原因。
+        // 只对 fail 记 —— user/end 不该以"错误"的口吻留在卡片上。
+        lastStopLine = (reason === "fail") ? (text.length ? text : "取不到播放地址") : ""
+        if (reason === "fail")
+            return text.length ? text : "取不到播放地址"
+        if (reason === "user") return "已停止"
+        if (reason === "end")  return text.length ? text : "播放结束"
+        // 没有 reason：可能是旧版 now.json（无该字段），或 lua 还没写出来。
+        // 一律按「未在播放」说，别替用户认领一个没发生过的操作。
+        return text.length ? text : "未在播放"
+    }
+
+    // 把失败原因弹给用户。**只在默认路径上才需要**（保留期开启时卡片还在，
+    // 原因会走 mainLyric，见 holdSession）。
+    //
+    // 为什么用 toast 而不是别的：
+    //   · mediaSession 的可用字段里**没有** status / error / queue
+    //     （MediaSession.h 的属性集合只有 title/artist/duration/position/
+    //      playState/cover/mainLyric/transLyric）⇒ 没有干净的"独立状态栏"。
+    //   · mainLyric 是卡片上唯一会滚动的文字，但默认配置下卡片已随会话结束消失，
+    //     写了也没人看；且它会和逐行歌词抢同一条通道。
+    //   · showToast 是宿主 qmlGlobal 的方法（onOpenRequested 已在用同一手法），
+    //     不依赖会话是否 active。
+    //
+    // ⚠️ 已知边界（如实标注，不假装覆盖）：`globalRef` 由插件页 attach() 时注入，
+    //    而 MediaBridge 是**惰性实例化**的 singleton —— 宿主重启后如果用户从没打开过
+    //    插件页，这个桥不存在，toast 自然也弹不出来。那种情况下用户唯一能看到的是
+    //    插件页内 main.qml:1090-1098 的 statusText（它本来就正确）。
+    function notifyFailure(text) {
+        if (!globalRef || !globalRef.showToast) return
+        var msg = String(text || "").trim()
+        if (!msg.length) msg = "取不到播放地址"
+        try {
+            globalRef.showToast(msg)
+            log("toast fail: " + msg)
+        } catch (e) {
+            // toast 失败绝不能影响播放控制 —— 宿主接口变动时这里要能静默降级
+            log("toast failed: " + e)
+        }
+    }
+
+    // 是否属于「该向用户解释」的失败（区别于 user 主动停 / end 正常播完）。
+    // 这两个绝不能上屏：用户自己按的停、队列正常播完，都不需要"报错"。
+    function isFailure() { return lastReason === "fail" }
 
     function lyricAt(pos) {
         if (!lyricLines || !lyricLines.length) return ""
@@ -361,12 +480,41 @@ QtObject {
         return (idx >= 0) ? String(lyricLines[idx].text || "") : ""
     }
 
+    // 上报给卡片的那一行的**最终**内容 = 当前歌词行 + 队列余量。
+    //
+    // queueLen 的去处：lua 一直在写这个字段（gdnext.lua:201），桥此前从不消费。
+    //   · 为什么不写进 session.title / artist：那两栏是**曲目身份**，混进队列余量
+    //     会把「换歌」判据（apply 里的 `session.title !== title`）和用户看到的
+    //     曲名一起变脏 —— 为了显示 5 个字去污染元数据，不划算。
+    //   · 为什么落在歌词行：卡片上唯一会滚动变化的一行文字就是它，逐行歌词
+    //     已经稳定占住这条通道，追加余量不新增布局、不挤压歌名/歌手/进度条
+    //     （MediaSession.h 的属性集合里**没有** status/error/queue 字段，
+    //      任何「独立状态文案」在当前宿主上都没有落脚点 —— 这是硬约束）。
+    //   · 只在「还有下一首」时出现，播到队列最后一首就不再显示，避免暗示还能续播。
+    function queueTail() {
+        var ql = parseInt(lastQueueLen, 10)
+        if (isNaN(ql) || ql < 1) return ""
+        var idx = lastIndex
+        if (idx < 1 || idx >= ql) return ""
+        return " · 接下来 " + (ql - idx) + " 首"
+    }
+
+    function lyricText(pos) {
+        return lyricAt(pos) + queueTail()
+    }
+
     function release() {
         cancelHold("release")
         if (owns && session && session.end) session.end()
         if (owns) log("release")
         owns = false
-        status = "未在播放"
+        // 🔴 status 不能无条件写成"未在播放"：默认配置（holdOnStop=false）下
+        //    onNow 分②刚用 stopText() 算出「取不到播放地址」，holdSession 立刻调
+        //    release()，这句就会把那个原因当场抹掉 ⇒ status 又变回没信息的一句话，
+        //    整个 reason 语义在默认路径上等于没修（这是打回 task-2 的原因之一）。
+        //    有 pendingStopLine 时就沿用它，让诊断日志保留真实原因。
+        status = pendingStopLine.length ? pendingStopLine : "未在播放"
+        pendingStopLine = ""
         syncTimer()
     }
 
@@ -383,7 +531,9 @@ QtObject {
     // 于是 ▶ / 下一首 / 上一首 都还在，点下去由 resumeAt() 把歌接回来。
     // 这是「按了停止就只能重开插件才能再播」那个问题的正解。
     function holdSession() {
-        if (!owns) return
+        // 没有会话时也要清掉 pendingStopLine：这条早退路径既不消费也不清理，
+        // 留着会让陈旧的失败原因漏给下一次无关的 release()（见 onNow 分②的注释）。
+        if (!owns) { pendingStopLine = ""; return }
         if (!holdOnStop) { release(); killMpv(); return }
         holdUntil = Date.now() + holdMs
         holdTimer.restart()
@@ -392,10 +542,26 @@ QtObject {
             if (session.playState !== psStopped) session.playState = psStopped
             if (session.position  !== 0) session.position = 0
             if (session.duration  !== 0) session.duration = 0
-            if (session.mainLyric !== "") session.setLyrics("", "")
+            // 🔴 失败原因要**留在这条通道上**，不能被清空盖掉。
+            //    保留期是唯一「卡片还在」的状态 ⇒ 这是用户在面板上能看到原因的地方。
+            //    · fail（取流失败 / 本地文件丢失）：写原因，用户需要知道为什么没声；
+            //    · user / end（主动停 / 正常播完）：清空，这两种不该显示成"出错了"。
+            //    注意这里写的是同一个 mainLyric 通道，清空会把原因抹掉，所以必须二选一。
+            var keep = isFailure() ? lastStopLine : ""
+            if (session.mainLyric !== keep) session.setLyrics(keep, "")
         }
+        // 保留期这条路**不调 release()**，所以 pendingStopLine 不会在这里被消费掉。
+        // 不主动清的话它会一直挂着，直到 holdMs 超时（3 分钟）holdExpired() → release()
+        // 才被拿去当 status —— 那时卡片早已过期，却会显示 3 分钟前那条失败原因。清掉。
+        pendingStopLine = ""
         lastStatus = "stopped"
-        status = "已停止 · 可再次播放"
+        // 🔴 这里必须**沿用 onNow 算出来的文案**，不能硬编码 —— 否则会把分②刚按
+        //    reason 区分好的「取不到播放地址」/「本地文件已丢失」/「播放结束」
+        //    当场覆写回「已停止 · 可再次播放」⇒ 整个 reason 语义在默认配置下等于没修
+        //    （holdOnStop 默认 false ⇒ 这个函数每次停播都会被 onNow 调到）。
+        //    「· 可再次播放」只在**用户主动停**时加：取流失败后按 ▶ 只会再失败一次，
+        //    那句提示在 fail 语境下是误导（这是 stopText 里 fail 不带后缀的原因）。
+        if (lastReason === "user") status = "已停止 · 可再次播放"
         // 🔴 停播就**当场回收播放器进程** —— 不设等待期、不留常驻进程。
         //    暂停/idle 的 mpv 仍然占几 MB + 一个无主的 IPC socket；而「下次开播」
         //    靠 ensurePlayer() 冷启动就够了（约 1~2 秒）。保留期留下的是**会话**
@@ -624,8 +790,8 @@ QtObject {
     function setLyrics(lines) {
         lyricLines = (lines && lines.length) ? lines.slice(0) : []
         if (owns && session) {
-            var line = lyricAt(lastPos > 0 ? lastPos : 0)
-            if (session.mainLyric !== line) session.setLyrics(line, "")
+            var shown = lyricText(lastPos > 0 ? lastPos : 0)
+            if (session.mainLyric !== shown) session.setLyrics(shown, "")
         }
     }
 

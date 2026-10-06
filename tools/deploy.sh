@@ -17,8 +17,38 @@ export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 NODE="${NODE:-}"
 [ -x "$NODE" ] || NODE=$(command -v node)
 echo "--- 重复声明检查 ---"
+# ⚠️ 必须用通配覆盖 qml/ 根目录，不能手写文件列表（2026-10-05 修）：
+#   旧写法 `"$L/qml/main.qml" pages/*.qml components/*.qml` **漏掉 MediaBridge.qml** ——
+#   而它恰恰是本门禁的由来文件：2026-10-03「整个插件页打不开」就是重复 property 声明，
+#   而 MediaBridge.qml 在 qmldir 里是 **singleton**（qml/MediaBridge.qml:9-13 自承：
+#   singleton 加载失败会让所有 import "." 的文件连坐 ⇒ 整个插件打不开）。
+#   它还是最容易插重的文件：singleton 没有父对象，48 处属性自然全写在顶层。
+#   ⇒ 这条门禁防的事故，事故文件本身却不在范围内。通配一劳永逸。
 "$NODE" "$R/tools/qml-dupdecl.js" \
-    "$L/qml/main.qml" "$L"/qml/pages/*.qml "$L"/qml/components/*.qml
+    "$L"/qml/*.qml "$L"/qml/pages/*.qml "$L"/qml/components/*.qml
+
+# 门禁自己的自检。**必须挂在这里**，否则自检本身会腐化：
+#   检查器的价值全在"抓到真事故"，而它上一版恰恰漏检了事故文件 MediaBridge.qml
+#   （旧写法手写文件列表，漏了 qml/ 根目录）。一个从没被验证过的检查器，
+#   它的"全绿"和"根本没跑"输出一样 —— 25 项合成夹具钉死"能抓到"与"不误报"。
+echo "--- 门禁自检 ---"
+# 自检里**故意**跑坏输入夹具（字面量通配符 / 不存在的文件），那两条 ❌ 会走 stderr。
+# 直接透传会让部署者以为门禁挂了 ⇒ 只在真失败时才把它吐出来。
+SELFLOG=/tmp/gdmusic_gate_selfcheck.log
+if ! "$NODE" "$R/tools/test-qml-dupdecl.js" >"$SELFLOG" 2>&1; then
+    echo "❌ 门禁自检失败（检查器本身可能已腐化）："
+    cat "$SELFLOG"
+    exit 1
+fi
+# reason 流自检：从 MediaBridge.qml **真源码**抠出 stopText/notifyFailure 求值，
+# 钉住「失败提示只弹一次、user/end 不弹」。这类"每拍都判一次"的逻辑最容易
+# 退化成每秒弹一次骚扰，或把用户主动停报成错误 —— 两者都只能靠求值断言防。
+REASONLOG=/tmp/gdmusic_reason_selfcheck.log
+if ! "$NODE" "$R/tools/test-reason-flow.js" >"$REASONLOG" 2>&1; then
+    echo "❌ reason 流自检失败："
+    cat "$REASONLOG"
+    exit 1
+fi
 
 adb -s "$S" shell "rm -rf $P; mkdir -p $P/bin $P/qml/components $P/qml/pages"
 

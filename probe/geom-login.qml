@@ -80,6 +80,12 @@ Item {
         }
         walk(ld.item, "LoginPage", 0)
         console.log("SCENARIO=" + root.scenario + " GEOM_BAD=" + bad)
+        // ⚠️ 2026-10-05 标注：这里算出了 bad 却用**裸 Qt.quit()**（恒 0），
+        //    且 probe/ 下没有 .sh 消费它 ⇒ 纯人工目视件。
+        //    另：root.scenario 定义了 0..3 四种形态，但全文没有代码把它改成 1/2/3
+        //    ⇒ **实际只跑 scenario=0**（.tmp/geom-{0,1,2,3}.qml 是别处跑出来的输出）。
+        //    本次不改断言性（改了就变成真门禁，需要配套 .sh 与真机回归），
+        //    只把身份写清楚。要变真断言件：`Qt.quit(bad>0?1:0)` + 配套 grep。
         Qt.quit()
     }
 }

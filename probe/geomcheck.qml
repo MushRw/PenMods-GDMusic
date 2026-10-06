@@ -82,6 +82,10 @@ Item {
             } else console.log("GEO tabRow=NOT-FOUND")
 
             console.log("GEO ALL-IN-BOUNDS=" + okAll)
+            // ⚠️ 2026-10-05 标注：算出了 okAll 却用**裸 Qt.quit()**（恒 0），
+            //    且 probe/ 下没有 .sh 消费它 ⇒ 纯人工目视件，不是断言件。
+            //    本次不改断言性（改成真门禁需要配套 .sh 与真机回归，不该顺手改），
+            //    只把身份写清楚。要变真断言件：`Qt.quit(okAll?0:1)` + 配套 grep。
             Qt.quit()
         }
     }

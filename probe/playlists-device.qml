@@ -60,7 +60,7 @@ Item {
 
         onLoaded: {
             var it = ld.item
-            if (!it) { console.log("CHECK FAIL 加载 main.qml 得到空对象"); Qt.quit(); return }
+            if (!it) { console.log("CHECK FAIL 加载 main.qml 得到空对象"); Qt.quit(1); return }
 
             var D = "/userdisk/Music/GDMusic"
             var ONLINE  = { id: "1997293311", source: "netease", name: "断气",
@@ -221,13 +221,16 @@ Item {
             })
 
             console.log("CHECK DONE pass=" + pass + " bad=" + bad)
-            Qt.quit()
+            // ⚠️ 2026-10-05：裸 Qt.quit() == Qt.quit(0)，失败也返回 0
+            //    ⇒ 退出码通道是断的。照抄 login-device.qml:126-127。
+            if (bad > 0) Qt.quit(1)
+            else Qt.quit(0)
         }
 
         onStatusChanged: {
             if (status === Loader.Error) {
                 console.log("CHECK FAIL main.qml 加载失败（Loader.Error）")
-                Qt.quit()
+                Qt.quit(1)
             }
         }
     }

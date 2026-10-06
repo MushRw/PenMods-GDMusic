@@ -207,8 +207,49 @@ for (const fn of diskMp3) {
 ok(mismatch === 0, '逐条核对：每首歌的 [词]/[图] 标记与磁盘实际一致（' + diskMp3.length + ' 首）')
 
 // ---- 真实歌名里的 shell/正则元字符不能把解析搞坏 ----
+// ⚠️ 这里原来写的是 `ok(true, ...)` —— 条件是**字面量 true**，tricky 有 0 首还是
+//    100 首都 pass++，文案还宣称"已逐条核对过"，代码里却没有任何核对。
+//    这是一条**恒真断言**（假绿）：它证明不了任何事，却占着"元字符安全"这个安全位。
+//    2026-10-05 改成真断言。
+//
+//    断言什么？分两段，因为"没样本"和"有样本且都对"是两种完全不同的情况：
+//      ① 本轮样本里有没有含元字符的歌 —— 没有就是**未被覆盖**（静默跳过，不是通过）
+//      ② 有的话，逐条验证它**能被解析回来**（真结论）
+//    ⚠️ 期望值一律用**被测代码自己的公式**重建，不手拼文件名：
+//      早期想按 `name + ' - ' + artist` 拼文件名，核对 main.qml:1201-1205 才发现
+//      分隔符是 `-`（无空格）且 sanitizeName(:1191) 会把 " < > | 等**清掉**——
+//      那些字符根本到不了文件名。**手写一份命名公式必然与真实现不一致。**
+//      正确做法：拿带元字符的样本喂进 parseLocalScan，看能否还原出同一条记录。
 const tricky = decorated.filter(r => /[、·…&|<>^*$()\[\]{}]/.test(r.name + r.artist))
-ok(true, '本轮有 ' + tricky.length + ' 首的歌名/歌手含 shell 或正则元字符（已逐条核对过）')
+if (tricky.length === 0) {
+    console.log('  ⚠️ 本轮样本里没有含 shell/正则元字符的歌名 —— 这段**未被覆盖**（不是"通过"）。')
+    console.log('     想覆盖它，需要挑带 & ( ) [ ] 、 等字符的歌再跑一次。')
+} else {
+    // 真断言：含元字符的样本必须能被 parseLocalScan 完整还原（文件/大小/名字）。
+    // 这正是"元字符没把解析搞坏"的准确表述。
+    let trickyBad = 0
+    for (const r of tricky) {
+        const fn = r.file ? r.file.split('/').pop() : ''
+        if (!fn) {
+            console.log('  ❌ 元字符样本 "' + r.name + ' / ' + r.artist + '" 没有解析出文件名')
+            trickyBad++
+            continue
+        }
+        // 用**真实的扫描行**重新喂一遍 parseLocalScan，必须还原出同一个文件名。
+        // 这比"拼一个期望字符串"可靠：期望值来自设备真实输出，不是手写常量。
+        const line = LM + r.size + '|' + fn
+        const back = api.parseLocalScan(line + '\n')
+        const okSame = back.length === 1 && back[0].file === r.file && back[0].size === r.size
+        if (!okSame) {
+            console.log('  ❌ 元字符样本往返失败：' + fn
+                        + ' -> ' + JSON.stringify(back.map(x => [x.file, x.size])))
+            trickyBad++
+        }
+    }
+    ok(trickyBad === 0,
+       '本轮 ' + tricky.length + ' 首含 shell/正则元字符的歌名/歌手，'
+       + '喂回 parseLocalScan 能逐条原样还原（文件名+大小）')
+}
 
 if (bad > 0) process.exit(1)
 console.log('  ' + pass + ' 项通过')

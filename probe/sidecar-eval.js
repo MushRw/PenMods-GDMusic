@@ -109,9 +109,25 @@ const mExts = clean.match(/readonly property var sidecarImgExts:\s*(\[[^\]]*\])/
 if (!mExts) die('读不到 sidecarImgExts')
 const IMGS = new Function('return ' + mExts[1])()
 
-// dlTmpDir 在 main.qml 里是由 stateDir 拼出来的，这里按同一公式还原
-const STATE = '/userdata/pen-data/share/NeteaseYoudao/YoudaoDictPen/penmods/gdmusic/state'
-const TMP = STATE + '/parts'
+// dlTmpDir 在 main.qml 里是由 stateDir 拼出来的，这里按同一公式还原。
+// ⚠️ 2026-10-05 修：原来这里是**写死的旧路径**
+//    '/userdata/pen-data/share/NeteaseYoudao/YoudaoDictPen/penmods/gdmusic/state'
+//    而 main.qml:40 的真值早已改成 "/tmp/gdmusic"（:74 dlTmpDir = stateDir + "/parts"）。
+//    危害不是"看着不对"，而是**静默地查错目录**：
+//      · 本脚本产出的 buildCoverCmd 会 mkdir 到设备上不存在的路径
+//      · sidecar-e2e.sh:108 / :152 两条「.part 已清理」断言永远查的是错误目录
+//        ⇒ 恒绿，而真值 /tmp/gdmusic/parts 里留残件这个真实风险**反被漏掉**
+//    修法与上面 5 个常量一致：**从源码读**，改了 stateDir 这条探针会立刻发现
+//    （而不是继续在一个不存在的目录上空转）。
+//
+//    两个都读，而不是只读一个：
+//      stateDir  给目录名，dlTmpDir 的字面量后缀给 "/parts"。
+//      若将来 main.qml 改了那个后缀（":74"），本探针跟着改；
+//      若公式本身被改成别的形状（比如换了函数），readStr 会**大声失败**（die），
+//      而不是像写死路径那样悄悄继续查错目录 —— 探针坏掉要看得见。
+const STATE = readStr(/readonly property string stateDir:\s*"([^"]+)"/, 'stateDir')
+const TMPD_SUFFIX = readStr(/readonly property string dlTmpDir:\s*stateDir\s*\+\s*"([^"]+)"/, 'dlTmpDir')
+const TMP = STATE + TMPD_SUFFIX
 
 const api = new Function(`
 var downloadDir = ${JSON.stringify(D)};
