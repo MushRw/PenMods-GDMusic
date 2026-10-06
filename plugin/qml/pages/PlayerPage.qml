@@ -14,7 +14,7 @@ Rectangle {
         id: bar
         width: parent.width
         title: "正在播放"
-        onBackClicked: if (playerPage.controller) playerPage.controller.goSearch()
+        onBackClicked: if (playerPage.controller) playerPage.controller.goPlayerBack()
         onSettingsClicked: if (playerPage.controller) playerPage.controller.openSettings()
     }
 

@@ -60,6 +60,7 @@ const body = ['songKeyOf', 'plKeyOf', 'copySong', 'clonePlaylists',
               'playlistTypeText', 'playlistHasSong', 'plErrText',
               'createPlaylist', 'renamePlaylist', 'deletePlaylist',
               'addSongToPlaylist', 'removeSongFromPlaylist', 'removeSongAt', 'playPlaylist',
+              'gotoPlayer',
               'sanitizeName', 'localNameFor', 'localPathFor', 'mappedPathFor',
               'findLocal', 'resolveEntry']
     .map(grab).join('\n\n')
@@ -80,6 +81,7 @@ var playlistSongMax = ${SONG_MAX};
 var playlistNameMax = ${NAME_MAX};
 var queue = [];
 var page = "";
+var playerBackPage = "";
 var idxHit = -1, saveCalls = 0, warns = [];
 var console = { warn: function (m) { warns.push(String(m)) },
                 log:  function () {} };

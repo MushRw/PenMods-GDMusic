@@ -860,7 +860,7 @@ Item {
     function playFrom(index) {
         if (!results || index < 0 || index >= results.length) return
         queue = results
-        page = "player"
+        gotoPlayer()
         startAt(index)
     }
 
@@ -1298,17 +1298,32 @@ Item {
     // 惰性 GC：清掉指向"已不在 localList 里"的条目（文件被外部删/改名了）。
     // 必须在一次**成功的**扫描之后调用。⚠️ localList 为空时**绝不动手** ——
     // 「文件夹真的空了」和「扫描挂了」在输出上无法区分，赌错的代价是清空整张表。
+    //
+    // 🔴 两轮确认（2026-10-06 改，对应审计 gdmusic-deep.md P1-3）：
+    //    原实现是「本轮扫描里没出现 ⇒ 立刻删」。但扫描是全量 `for f in *.mp3`，
+    //    只要有一部分文件没扫到（stat 失败 / 坏簇 / 解析时 fn 为空被 continue 掉），
+    //    localList 就是**残缺**的 —— 此时"没出现"不等于"不存在"，直接删会静默抹掉
+    //    用户好好的手动匹配关系（✓ 徽标消失、离线歌单里的条目变得不能播）。
+    //    而 refreshLocal 的调用点极多（每次切到本地页都跑一遍），误删概率会累积。
+    //    改成：首次悬空只标记，下一轮仍悬空才真删；重新出现则撤销怀疑。
+    //    代价是"真删晚一轮"，但 GC 本来就是惰性的，晚一轮无感。
+    property var mapPendingDrop: ({})
     function gcFileMap() {
         if (!localList.length) return
         var alive = {}, i
         for (i = 0; i < localList.length; i++)
             if (localList[i] && localList[i].file) alive[localList[i].file] = true
-        var m = fileMap, drop = 0
-        for (var p in m) if (!alive[p]) { delete m[p]; drop++ }
+        var m = fileMap, pend = mapPendingDrop, next = {}, drop = 0
+        for (var p in m) {
+            if (alive[p]) continue               // 还在 → 撤销上一轮的怀疑
+            if (pend[p]) { delete m[p]; drop++ } // 上一轮已怀疑过 → 真删
+            else next[p] = true                  // 首次怀疑 → 只标记
+        }
+        mapPendingDrop = next
         if (drop > 0) {
             fileMap = m
             saveFileMap()
-            console.log("fileMap: GC 清掉 " + drop + " 条悬空登记")
+            console.log("fileMap: GC 清掉 " + drop + " 条悬空登记（两轮确认后）")
         }
     }
 
@@ -1575,7 +1590,7 @@ Item {
         var list = []
         for (var i = 0; i < pl.songs.length; i++) list.push(copySong(pl.songs[i]))
         queue = list
-        page = "player"
+        gotoPlayer()
         startAt(idx)
         return { ok: true, err: "" }
     }
@@ -2835,7 +2850,7 @@ Item {
             if (e.lyric_id) song.lyric_id = e.lyric_id
         }
         queue = [song]
-        page = "player"
+        gotoPlayer()
         startAt(0)
     }
 
@@ -3221,8 +3236,22 @@ Item {
     // 网易云账号页。从设置页进入；返回回到设置页（**不再动 backPage**）。
     function openLogin() { page = "login" }
     function goSearch() { page = "search" }
+    // 🔴 播放页的「来处」必须**单独记一份**，不能复用 backPage —— 理由与 settingsBackPage 相同：
+    //    backPage 是加歌页在用，曾被 openLogin 污染成 "settings"，导致 goBack() 把自己赋给
+    //    自己、用户永远卡在设置页出不去。同一个变量被两个功能复用就是那次事故的根因。
+    property string playerBackPage: ""
+    function gotoPlayer() {
+        // 只在「进入前」记录一次。已经在播放页时（连点、或播放页内再触发）不覆盖，
+        // 否则 playerBackPage 会变成 "player"，返回就成了停在原地。
+        if (page !== "player") playerBackPage = page
+        page = "player"
+    }
+    function goPlayerBack() {
+        // 自守卫：万一将来新增入口忘了排除 player，也退化成回搜索页而不是"返回了但没动"。
+        page = (playerBackPage && playerBackPage !== "player") ? playerBackPage : "search"
+    }
     // 下拉面板的音乐卡片被点开时，由 MediaBridge 调回来（页面还活着的情况）
-    function openPlayer() { page = "player" }
+    function openPlayer() { gotoPlayer() }
     // 给子页面用的提示接口 —— 子文件里访问不到 main.qml 的 `toast` id
     // （QML 的 id 作用域是单文件内），所以由 controller 转发。
     function toastMsg(msg) { toast.show(msg) }

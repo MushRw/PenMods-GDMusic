@@ -46,6 +46,10 @@ local switching  = false     -- 正在主动切歌，用于忽略由此产生的
 local loading    = false     -- 正在异步取流（取流期间不要被 end-file 再推进一次）
 local load_token = 0         -- 取流请求序号：只有最新一次的返回才生效
 local seq        = 0         -- now.json 的递增号，QML 用它判断状态是否新鲜
+-- 当前这一首之前已连续跳过的首数（play_index 的 skipped 参数快照）。
+-- 🔴 end-file 里顺延时要**接着**计数：若每次都从 0 重新数，MAX_SKIP 就形同虚设——
+--    一整段腐链（GD 直链带时效，很常见）会被无限顺延下去，永远退不出。
+local cur_skipped = 0
 
 -- ==================== 小工具 ====================
 local function sh(cmd)
@@ -329,6 +333,7 @@ local function play_index(i, skipped)
         return
     end
     skipped = skipped or 0
+    cur_skipped = skipped      -- end-file 顺延时接着数（见 cur_skipped 的注释）
     if i < 1 or i > #conf.list then
         -- 队列播完
         release_and_stop("end", "播放结束")
@@ -410,8 +415,24 @@ register_evt("end-file", function(e)
     local r = e and e.reason or ""
     log("end-file: reason=" .. r .. " switching=" .. tostring(switching) .. " loading=" .. tostring(loading))
     if switching then
-        -- 我们自己 loadfile/stop 引发的，不当作「播完」
         switching = false
+        -- 🔴 不能一律 return。reason 是 eof/error 时，说明**本次 loadfile 自己就没播成**：
+        --    拿到了 URL，但流打不开（GD 直链带时效，403/404/超时很常见；本地文件也可能已损坏）。
+        --    这条路径下 file-loaded **永远不会触发**，switching 再没有别的复位点；
+        --    在这里直接吞掉 ⇒ 连播静默卡死：界面停在当前首、进度不动、不出声、
+        --    不 toast、不换歌，lua.log 里只留「end-file reason=error switching=true」一行——
+        --    而这一行恰恰自证它是切歌引发的，不是自然播放结束。
+        --    switching 的设计意图是「别把自己主动切歌的 end-file 当成上一首播完」，
+        --    那只该针对 stop/quit；加载失败必须走坏歌顺延。
+        --    （2026-10-06 修；对应审计 gdmusic-deep.md P1-1）
+        if r == "eof" or r == "error" then
+            log("end-file: 本次 loadfile 未播成（reason=" .. r .. "），按坏歌顺延")
+            if conf and conf.autoNext ~= false then
+                play_index(index + 1, cur_skipped + 1)
+            else
+                release_and_stop("fail", "播放失败")
+            end
+        end
         return
     end
     if loading then

@@ -75,6 +75,7 @@ var saveFileMap = function () { saveCount++ };
 // 这里给空表让 decorateLocal 走"没有附件"分支 —— 本探针只关心徽标/真名/登记表。
 var sidecarImgs = ({});
 var sidecarLrcs = ({});
+var mapPendingDrop = ({});
 ${body}
 return {
   findLocal: findLocal,
@@ -91,6 +92,7 @@ return {
   getList:    function () { return localList },
   setMap:     function (m) { fileMap = m },
   getMap:     function () { return fileMap },
+  resetGc:    function () { mapPendingDrop = ({}) },
   saves:      function () { return saveCount }
 };
 `)()
@@ -172,7 +174,8 @@ const saved2 = api.saves()
 mapRemove(RENAMED)
 ok(api.saves() === saved2, '删不存在的条目不白写一次库')
 
-console.log('--- ⑦ gcFileMap：只清悬空的，且空列表时不动手 ---')
+console.log('--- ⑦ gcFileMap：只清悬空的，空列表不动手，且必须两轮确认 ---')
+api.resetGc()
 api.setMap({
   [NORMAL]:  { id: '1', source: 'netease', t: 1 },
   [RENAMED]: { id: '2', source: 'netease', t: 1 }
@@ -180,9 +183,24 @@ api.setMap({
 api.setList([{ file: NORMAL, size: 10 }])
 gcFileMap()
 ok(api.getMap()[NORMAL] !== undefined, '文件还在 → 保留')
-ok(api.getMap()[RENAMED] === undefined, '文件没了 → 清掉')
+// ⚠️ 关键：扫描可能是**残缺**的（stat 失败 / 坏簇 / 解析被 continue），
+//    "这一轮没扫到"不等于"文件没了" ⇒ 首次悬空只能标记，不能立刻删，
+//    否则一次扫描失败就静默抹掉用户的手动匹配关系（审计 gdmusic-deep.md P1-3）。
+ok(api.getMap()[RENAMED] !== undefined, '首次判定悬空 → 只标记不删')
+gcFileMap()
+ok(api.getMap()[RENAMED] === undefined, '连续两轮都悬空 → 才真删')
+// 撤销怀疑：上一轮标记过的条目，这一轮又扫到了 ⇒ 必须复活，不能被下一轮误删
+api.resetGc()
+api.setMap({ [NORMAL]: { id: '1', source: 'netease', t: 1 } })
+api.setList([{ file: RENAMED, size: 5 }])
+gcFileMap()
+ok(api.getMap()[NORMAL] !== undefined, '本轮没扫到 → 先标记')
+api.setList([{ file: NORMAL, size: 10 }])
+gcFileMap()
+ok(api.getMap()[NORMAL] !== undefined, '下一轮又扫到了 → 撤销怀疑，不删')
 // ⚠️ 关键边界：localList 为空时既可能是"文件夹真的空了"，也可能是"扫描挂了"，
 //    两者输出无法区分 ⇒ 必须不动手，否则一次扫描失败就清空整张表。
+api.resetGc()
 api.setMap({ [NORMAL]: { id: '1', source: 'netease', t: 1 } })
 api.setList([])
 gcFileMap()
