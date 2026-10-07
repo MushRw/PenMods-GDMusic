@@ -9,14 +9,27 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 QML=plugin/qml/main.qml
+# ⚠️ 跨仓库依赖（2026-10-05 加守卫）：
+#   这是**另一个仓库** PenMods 的文件，不是本插件的。而且它只在 PenMods 的
+#   tmp/quick-setting-port 分支（590b521 引入）上有，main / origin/main /
+#   当前 topic/uac2-kmod 都没有 —— 实测该目录下只有
+#   InputDaemon.{cpp,h} 与 ScreenManager.{cpp,h}，没有 ScreenGrabber.cpp。
+#   旧版没有守卫 ⇒ E 段 10 条 `has ... $SG` 全 FAIL（grep 读不到文件返回 2），
+#   看起来像「C++ 侧防线崩了」，实际是「参考仓库不在那个分支」。
+#   ⇒ 门禁宁可明确 SKIP，也不能用一堆假红盖住 A~D 段真正的信号。
 SG=../PenMods/src/system/input/ScreenGrabber.cpp
 pass=0; bad=0
 # ok <实际值> <期望值> <描述>
 ok()  { if [ "$1" = "$2" ]; then pass=$((pass+1)); echo "  ok   $3"; else bad=$((bad+1)); echo "  FAIL $3 (得到 '$1'，期望 '$2')"; fi; }
 # 有 <描述>：grep -q 命中即过
-has() { if grep -q "$1" "$2"; then pass=$((pass+1)); echo "  ok   $3"; else bad=$((bad+1)); echo "  FAIL $3 (找不到 /$1/ 于 $2)"; fi; }
+# ⚠️ 2026-10-05：目标文件不存在时**不计 FAIL、也不计 PASS**，只打印 SKIP。
+#    旧版对缺失文件照跑 grep（返回 2）⇒ 判 FAIL ⇒ 一个人为的「引用仓库没 checkout」
+#    伪装成「C++ 防线崩了」。SKIP 不进两个计数器，所以不污染 A~D 段的真实结论。
+has() { if [ ! -f "$2" ]; then echo "  SKIP $3 —— 被测文件不存在: $2"; return; fi
+         if grep -q "$1" "$2"; then pass=$((pass+1)); echo "  ok   $3"; else bad=$((bad+1)); echo "  FAIL $3 (找不到 /$1/ 于 $2)"; fi; }
 # 无 <描述>：grep -q 未命中即过
-hasnt(){ if grep -q "$1" "$2"; then bad=$((bad+1)); echo "  FAIL $3 (仍存在 /$1/)"; else pass=$((pass+1)); echo "  ok   $3"; fi; }
+hasnt(){ if [ ! -f "$2" ]; then echo "  SKIP $3 —— 被测文件不存在: $2"; return; fi
+          if grep -q "$1" "$2"; then bad=$((bad+1)); echo "  FAIL $3 (仍存在 /$1/)"; else pass=$((pass+1)); echo "  ok   $3"; fi; }
 
 echo "=== A. 哨兵路径（两条通道必须同名，否则一个 touch 覆盖不到）==="
 has 'shotReq: *"/tmp/penmods_shot"'      $QML "QML 侧哨兵是 /tmp/penmods_shot"
@@ -51,7 +64,7 @@ has 'grab-nores'                         $QML "无结果对象时写 grab-nores"
 has 'ok ? "ok " : "fail "'                $QML "区分 ok / fail 落盘结果"
 has 'shotLog'                            $QML "结果日志路径 shotLog 贯穿"
 
-echo "=== E. C++ 侧关键防线 ==="
+echo "=== E. C++ 侧关键防线（跨仓库，缺失则 SKIP）==="
 has 'grabWindow()'                       $SG "走 QQuickWindow::grabWindow()"
 # 设备若没编 PNG 编码器，save() 返回 false 写出 0 字节文件 —— 症状与「抓不到」一模一样
 has 'supportedImageFormats'              $SG "显式检查 PNG 编码器存在"
@@ -65,4 +78,19 @@ has 'isExposed'                          $SG "记录 exposed 状态（区分「�
 
 echo ""
 echo "pass=$pass bad=$bad"
+# ---- 退出码语义（与 tools/qml-dupdecl.js 对齐）----
+#   0 = 真的全过
+#   1 = 检查出**真失败**（有断言没通过）—— 去改代码
+#   2 = **没能完成检查**（缺依赖文件）—— 不是代码坏了，是环境没准备好
+# ⚠️ 2 绝不能省成 0：C++ 侧根本没读，"全绿"是假的，等于把假绿又装回来。
+#    也绝不能混成 1：CI 里一道红要能分清「有 bug 去修」与「先 checkout 依赖」。
+if [ ! -f "$SG" ]; then
+    echo ""
+    echo "❌ 段 E 未执行：C++ 参考文件不存在"
+    echo "   $SG"
+    echo "   它属于另一个仓库 PenMods，且只在 tmp/quick-setting-port 分支（590b521）上。"
+    echo "   ⇒ 本次结果只覆盖段 A~D（纯 QML 侧）。要跑段 E 请先 checkout 那个分支。"
+    if [ "$bad" -eq 0 ]; then exit 2; else exit 1; fi
+fi
 [ "$bad" -eq 0 ] || exit 1
+exit 0

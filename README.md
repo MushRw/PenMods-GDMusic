@@ -83,11 +83,23 @@ bash probe/sidecar-device.sh # 真机：把 QML 推上去用 qmlscene 加载，�
 - 检查器自己有自检（`node tools/test-qml-dupdecl.js`，25 项合成夹具），也**已挂进门禁**：
   一个从没被验证过的检查器，它的"全绿"和"根本没跑"输出一样 —— 而它上一版恰好漏检了
   事故文件 `MediaBridge.qml` 本身。
-- `node tools/test-reason-flow.js`（19 项）：从 `MediaBridge.qml` **真源码**抠出
+- `node tools/test-reason-flow.js`（20 项）：从 `MediaBridge.qml` **真源码**抠出
   `stopText`/`notifyFailure` 求值，钉住「取流失败只提示一次」「user/end 不提示」。
   这类"每秒判一次"的逻辑最容易退化成每次轮询都弹一次骚扰，或把用户主动停报成错误。
   同样**已挂进门禁**。
+- ⚠️ **调用宿主 `qmlGlobal.showToast` 必须传满两个实参**：宿主签名是
+  `void showToast(const std::string&, const QColor& theme = "#1A1B1F")`
+  （PenMods `src/common/Utils.h:30`），但 **QML 看不见 C++ 的默认参数** ——
+  moc 注册的是完整参数表，少传一个会抛 `Insufficient arguments`。
+  证据：`neo/factory-qml` 里 67 处 `qmlGlobal.showToast(...)` **全部传 2 个**。
+  这类错误特别阴：调用点外面套着 `try/catch`（toast 绝不能影响播放控制），
+  异常被静默吞掉 ⇒ 用户什么也看不到，日志只有一行 `toast failed`。
+  `test-reason-flow.js` 的假 `showToast` **刻意校验实参个数**来防它 ——
+  夹具若对参数个数没意见，就永远测不出这类回归（第一版夹具正是如此）。
 - 真机探针需要设备在线，脚本读 `ADB_SERIAL` 环境变量。
+- `probe/shot.sh` 的段 E 断言另一个仓库的 `ScreenGrabber.cpp`，只在 PenMods 的
+  `tmp/quick-setting-port` 分支上。缺该文件时它打印 SKIP 并 **`exit 2`**
+  （没能完成检查），不会用一堆假红盖住段 A~D 的真实信号。
 
 ### 在 Windows 上跑门禁（PowerShell）
 

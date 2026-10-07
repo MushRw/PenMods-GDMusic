@@ -11,7 +11,8 @@
 const fs = require('fs')
 const path = require('path')
 
-const SRC = path.join(__dirname, '..', 'plugin', 'qml', 'MediaBridge.qml')
+const SRC = process.env.GD_BRIDGE_SRC
+  || path.join(__dirname, '..', 'plugin', 'qml', 'MediaBridge.qml')
 const src = fs.readFileSync(SRC, 'utf8')
 
 // 抠函数体：从 `function NAME(` 到与之配对的 `}`（括号配对，跳过字符串）
@@ -49,12 +50,23 @@ function ok(c, label) {
 }
 
 // 模拟桥对象：只有被求值函数真正用到的状态
-// 计数挂在 globalRef 上：真实调用是 globalRef.showToast(msg)，
+// 计数挂在 globalRef 上：真实调用是 globalRef.showToast(msg, color)，
 // 所以 showToast 里的 this 绑的是 globalRef，不是桥对象。
+//
+// 🔴 这个假 showToast **刻意校验实参个数**：宿主签名是 C++
+//    `showToast(const std::string&, const QColor& theme = "#1A1B1F")`，
+//    但 QML 看不见 C++ 默认参数 —— moc 注册的是完整参数表，少传一个会抛
+//    "Insufficient arguments"。夹具必须复现这个约束，否则它测不出这类回归。
+//    （第一版夹具签名是 `function (m)`，对参数个数毫无意见 ⇒ 真代码只传 1 个
+//     它照样全绿。夹具比被测代码宽松，就等于没测。）
 function makeBridge() {
   const ref = {
-    toastCount: 0, lastToast: '', toasts: [],
-    showToast: function (m) { ref.toastCount++; ref.lastToast = m; ref.toasts.push(m) },
+    toastCount: 0, lastToast: '', lastToastColor: '', toasts: [],
+    showToast: function (m, color) {
+      if (arguments.length < 2)
+        throw new Error('Insufficient arguments (expected 2, got ' + arguments.length + ')')
+      ref.toastCount++; ref.lastToast = m; ref.lastToastColor = color; ref.toasts.push(m)
+    },
   }
   return {
     lastReason: '', lastStopLine: '', pendingStopLine: '', lastStatus: '',
@@ -86,6 +98,8 @@ console.log('=== 1. fail 首次转入 -> 弹一次 ===')
   const txt = f.stopText({ status: 'stopped', reason: 'fail', text: FAIL_MSG })
   ok(txt === FAIL_MSG, 'stopText 返回 lua 给的文案，实测：' + txt)
   ok(b._ref.toastCount === 1, 'toast 弹了 1 次，实测：' + b._ref.toastCount)
+  ok(b._ref.lastToastColor === '#E5605C',
+     'toast 带上了颜色实参（QML 看不见 C++ 默认参数，少传会抛 Insufficient arguments），实测：' + b._ref.lastToastColor)
   ok(b.lastStopLine === FAIL_MSG, 'lastStopLine 记下原因（供保留期显示）')
   ok(f.isFailure() === true, 'isFailure() 为真')
 }

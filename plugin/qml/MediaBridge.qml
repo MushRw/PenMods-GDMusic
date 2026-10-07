@@ -457,8 +457,20 @@ QtObject {
         if (!globalRef || !globalRef.showToast) return
         var msg = String(text || "").trim()
         if (!msg.length) msg = "取不到播放地址"
+        // 🔴 必须传**两个**实参。宿主签名是 C++ 侧
+        //    `void showToast(const std::string&, const QColor& theme = "#1A1B1F")`
+        //    （PenMods/src/common/Utils.h:30），但 **QML 看不见 C++ 的默认参数** ——
+        //    moc 注册的是完整参数表，少传一个会抛 "Insufficient arguments"。
+        //    证据：neo/factory-qml 里 `qmlGlobal.showToast(...)` 共 67 处调用，
+        //    **全部传 2 个实参**（含 3 处跨行写法，逐个数过），没有一处只传 1 个。
+        //    本函数第一版只传 msg ⇒ 唯一的失败可见通道会当场抛异常，
+        //    被下面的 catch 静默吞掉 ⇒ 用户什么都看不到，且日志只说"toast failed"。
+        //    主题色用字面量而不是 Theme.danger：MediaBridge 是**必须能单独加载**的
+        //    singleton（它一挂，所有 `import "."` 的文件全报 "Type MediaBridge unavailable"），
+        //    为一个颜色去依赖另一个 singleton 不划算。字面量也是宿主侧惯用法
+        //    （factory-qml 里到处是 "#2D2E33" / "#E9900C"）。此处取 Theme.qml:14 的 danger 值。
         try {
-            globalRef.showToast(msg)
+            globalRef.showToast(msg, "#E5605C")
             log("toast fail: " + msg)
         } catch (e) {
             // toast 失败绝不能影响播放控制 —— 宿主接口变动时这里要能静默降级
@@ -761,7 +773,9 @@ QtObject {
         // 只能给一句提示 —— 总比点下去毫无反应强。
         try {
             if (globalRef && globalRef.showToast)
-                globalRef.showToast("GD音乐正在后台播放，打开插件可查看")
+                // ⚠️ 同样必须传两个实参（见 notifyFailure 的注释：QML 看不见 C++
+                //    默认参数，少传一个会抛 "Insufficient arguments" 被这里吞掉）。
+                globalRef.showToast("GD音乐正在后台播放，打开插件可查看", "#E5605C")
         } catch (e) {
             log("open feedback failed: " + e)
         }
