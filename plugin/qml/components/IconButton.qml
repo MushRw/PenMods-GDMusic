@@ -15,6 +15,11 @@ Rectangle {
 
     property string kind: "play"        // play | pause | prev | next | download | queue | plus
     property color tint: Theme.text
+    // 画布尺寸。默认 20（播放页 36×32 用），顶栏按钮只有 30×28 ⇒ 传 16 与同排其它图标一致。
+    // ⚠️ 所有绘制坐标都按 20×20 写死，所以画布变小必须**等比缩放**，否则图形会溢出画布
+    //    （被裁掉一角，看起来像图标画坏了）。用 scale 而不是重写坐标：
+    //    图标路径只有一份，改一处尺寸不用把 7 个分支的坐标全部重算。
+    property real iconSize: 20
     signal clicked()
 
     Canvas {
@@ -22,6 +27,8 @@ Rectangle {
         anchors.centerIn: parent
         width: 20
         height: 20
+        // 缩放比：iconSize=20 时是 1（原样），iconSize=16 时是 0.8
+        scale: btn.iconSize / 20
 
         onPaint: {
             var ctx = getContext("2d");

@@ -353,7 +353,12 @@ Item {
 
     // ================= 页面 =================
     property string page: "search"
-    property string backPage: "search"
+    // 「来处」槽位 —— 每个需要记住来处的页面一个，**全部声明在这里**（别在导航区再声明一遍，
+    // 重复 property 会让整页打不开，2026-10-03 事故 + 2026-10-07 重构时又踩过一次）。
+    // ⚠️ 只经 navGet/navSet 读写，不要在别处直接赋值 —— 直接赋值就是三次死循环事故的根因。
+    property string backPage: "search"          // addpick 用（顶部这行是原始声明，勿重复）
+    property string settingsBackPage: ""        // settings 用
+    property string playerBackPage: ""          // player 用
 
     // ================= 搜索 =================
     property string keyword: ""
@@ -1152,24 +1157,96 @@ Item {
     // ============================================================
     // 歌词 / 封面
     // ============================================================
+    // 解析 LRC。**不带翻译**——只有原文时用它（只有 lyric 的接口响应）。
     function parseLrc(text) {
+        return mergeLrc(text, "")
+    }
+
+    // 解析**一个 .lrc 文件**：原文与翻译可能都在里面。
+    // 本地 .lrc 是"把 tlyric 拼在 lyric 后面"存下来的（标准 LRC 双语的常见存法），
+    // 所以同一个时间戳会出现**两次**：第一次原文、第二次翻译。
+    // 这里按时间分组，同组第一条当原文、第二条当翻译 —— 与 mergeLrc 的产出结构一致，
+    // 于是渲染层只认 {text, trans} 一种形状，不必区分"来自网络"还是"来自磁盘"。
+    //
+    // ⚠️ 判据是"同时间戳出现两次"而不是"文件里有个分隔标记"：老文件是拼出来的、
+    //    没有标记，靠标记会全部漏掉（存量用户下载的歌就属于这类）。
+    function parseLrcFile(text) {
+        var flat = mergeLrc(text, "")   // 先全当原文收出来（此时每条都带 trans=""）
         var out = []
-        if (!text) return out
-        var lines = String(text).split("\n")
-        for (var i = 0; i < lines.length; i++) {
-            var tags = lines[i].match(/\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g)
-            if (!tags) continue
-            var body = lines[i].replace(/\[[^\]]*\]/g, "").trim()
-            if (!body.length) continue
-            for (var j = 0; j < tags.length; j++) {
-                var m = tags[j].match(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/)
-                if (!m) continue
-                var frac = m[3] ? parseFloat("0." + m[3]) : 0
-                out.push({ time: parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + frac, text: body })
+        var byKey = {}
+        for (var i = 0; i < flat.length; i++) {
+            var k = flat[i].time.toFixed(3)
+            if (byKey[k] === undefined) {
+                byKey[k] = { time: flat[i].time, text: flat[i].text, trans: "" }
+                out.push(byKey[k])
+            } else if (byKey[k].trans === "") {
+                // 同一时间的第二条 ⇒ 当翻译（只有还没填过翻译时才采纳）
+                byKey[k].trans = flat[i].text
             }
+            // 第三条及以后：忽略（原文/翻译各一条是正常形态，多余的没有语义）
         }
         out.sort(function(a, b) { return a.time - b.time })
         return out
+    }
+
+    // 🔴 解析 LRC 并把**翻译合并到原文条目上**（2026-10-07 修「有翻译时歌词时序错乱」）。
+    //
+    // 旧实现（错）：
+    //     var merged = lyric + "\n" + tlyric
+    //     lyricLines = parseLrc(merged)      // ⇒ 原文与翻译成了**并列的两组条目**
+    //   网易云/GD 的 tlyric 时间戳与 lyric **完全相同** ⇒ 同一时刻两条都命中，
+    //   而 updateLyricIndex 取「最后一个 time <= pos」⇒ 取到的是**翻译**。
+    //   症状（真机复现）：当前行显示翻译、原文被跳过；而面板的"下一行"取 index+1
+    //   ⇒ 显示的是**下一句的原文** ⇒ 翻译与原文错位一句。用户看到的就是"时序错乱"。
+    //
+    // 正确做法：按时间把翻译**挂到原文上** —— {time, text, trans}。
+    //   · 索引只按原文时间走（原文是主，翻译是附注）
+    //   · 原文/翻译永远成对，不可能错位
+    //   · 没有对应翻译的原文 trans 为空串（渲染层据此决定要不要显示第二行）
+    //
+    // ⚠️ 翻译里可能有**原文没有**的时间戳（如纯音乐提示、翻译行数与原文不等）。
+    //    这些条目**不能**塞进 out（否则又变成"并列条目"把索引带偏）——
+    //    丢弃即可：它们本来就是没有原文可挂的孤儿翻译。
+    function mergeLrc(lyricText, transText) {
+        function collect(txt, isTrans) {
+            var arr = []
+            if (!txt) return arr
+            var lines = String(txt).split("\n")
+            for (var i = 0; i < lines.length; i++) {
+                var tags = lines[i].match(/\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g)
+                if (!tags) continue
+                var body = lines[i].replace(/\[[^\]]*\]/g, "").trim()
+                if (!body.length) continue
+                for (var j = 0; j < tags.length; j++) {
+                    var m = tags[j].match(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/)
+                    if (!m) continue
+                    var frac = m[3] ? parseFloat("0." + m[3]) : 0
+                    arr.push({ time: parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + frac,
+                               text: body, trans: isTrans })
+                }
+            }
+            return arr
+        }
+
+        var orig = collect(lyricText, false)
+        if (!orig.length) return orig
+        var tr = collect(transText, true)
+
+        // 翻译按时间建索引。同一时间多条翻译时保留**第一条**（重复行没有更好的处理）。
+        // ⚠️ 用字符串化后的时间做 key：浮点数直接当 key 会因精度问题漏匹配
+        //    （0.1+0.2 类误差），而这里的时间来自 parseInt+parseFloat，两位小数，
+        //    用 toFixed(3) 归一是安全的。
+        var tmap = {}
+        for (var k = 0; k < tr.length; k++) {
+            var key = tr[k].time.toFixed(3)
+            if (tmap[key] === undefined) tmap[key] = tr[k].text
+        }
+        for (var n = 0; n < orig.length; n++) {
+            var kk = orig[n].time.toFixed(3)
+            orig[n].trans = (tmap[kk] !== undefined) ? tmap[kk] : ""
+        }
+        orig.sort(function(a, b) { return a.time - b.time })
+        return orig
     }
 
     function updateLyricIndex() {
@@ -2193,17 +2270,16 @@ Item {
         // ⚠️ 已经在加歌页里再开一次时**不要**覆盖 backPage。
         //    那样它会被写成 "addpick"，之后「关闭」永远是回到本页 ——
         //    症状是「怎么按返回都出不去这个页面」，而且只在特定操作顺序下出现，
-        //    极难复现定位。允许的入口本来就只有一个（从别的页长按 / 播放页 ＋），
-        //    所以"已经在本页"只可能是重复调用，跳过记 backPage 一定是对的。
-        if (page !== "addpick") backPage = page
-        page = "addpick"
+        // 走集中式 navEnter：它会自动拒绝「自己 / 自己的下游」这类非法来处，
+        // 所以"在加歌页里再开一次"不会再污染 backPage（旧写法要手写 if 才防得住）。
+        navEnter("addpick")
     }
 
     function closeAddPick() {
         addPickSong = null
         addPickStep = "list"
         plNewSong = null
-        page = backPage
+        navLeave("addpick")
     }
 
     // 页面只传歌单 id：用哪种形态（在线 id / 本地 file）由数据层按歌单类型挑，
@@ -2883,7 +2959,9 @@ Item {
         try { txt = String(shell.exec("cat " + shellQuote(localLrcFor(file)) + " 2>/dev/null")) }
         catch (e) { txt = "" }
         if (!txt.length) { lyricLines = []; lyricIndex = -1; return false }
-        lyricLines = parseLrc(txt)
+        // 用 parseLrcFile：本地 .lrc 里原文与翻译是**拼在一起**存的（同时间戳出现两次），
+        // 按时间分组还原成 {text, trans}。用 parseLrc 会把两份都当原文 ⇒ 时序错乱。
+        lyricLines = parseLrcFile(txt)
         lyricIndex = -1
         updateLyricIndex()
         return true
@@ -2907,10 +2985,11 @@ Item {
             var o = null
             try { o = JSON.parse(txt) } catch (e) { return }
             if (!o) return
-            var merged = String(o.lyric || "")
-            if (o.tlyric) merged = merged + "\n" + String(o.tlyric)
+            // ⚠️ 必须把 lyric 与 tlyric **分开**传（不能先拼成一个字符串再解析）——
+            //    否则原文与翻译会成为并列条目，索引被翻译抢走、与原文错位一句。
+            //    详见 mergeLrc 的注释（2026-10-07 修的「有翻译时时序错乱」）。
             if (currentSong && song.id !== currentSong.id) return   // 已切歌，丢弃
-            lyricLines = parseLrc(merged)
+            lyricLines = mergeLrc(String(o.lyric || ""), String(o.tlyric || ""))
             lyricIndex = -1
             updateLyricIndex()
         })
@@ -3221,35 +3300,107 @@ Item {
     // ============================================================
     // 导航
     // ============================================================
-    // 🔴 设置页的"来处"必须**单独记一份**，不能复用 backPage（backPage 是加歌页在用）。
-    //    踩过的坑：openLogin 里写 `backPage = "settings"` —— 于是从设置页进登录页再返回，
-    //    backPage 已被污染成 "settings"，之后在设置页点返回 ⇒ goBack() 把自己又赋给
-    //    自己 ⇒ **永远卡在设置页出不去**（用户原话："还没法退出设置界面"）。
-    //    症状特别迷惑：返回箭头看得见、点得着、也没报错，只是页面纹丝不动。
-    property string settingsBackPage: ""
-    function openSettings() { settingsBackPage = page; page = "settings" }
-    // 分派式返回：登录页回设置页，其余回"进设置前的那个页"。
+    // 🔴 集中式导航（2026-10-07 重构）。**所有「记来处 / 返回」都必须走 navEnter / navLeave**，
+    //    不要再在别处直接 `backPage = ...`。
+    //
+    // 为什么集中：这个文件历史上出现过**三次**同源的死循环事故，每次都是「来处变量被污染」——
+    //   ① backPage 被 openLogin 写成 "settings" ⇒ 设置页返回时把自己赋给自己，卡死在设置页；
+    //   ② settingsBackPage 被写成 "settings"（在设置页上再点一次齿轮）⇒ 同上；
+    //   ③ playerBackPage 被写成 "queue" ⇒ 播放页↔播放列表互相指向，
+    //      连按返回永远在这两页之间跳（用户原话：「退出就只能在这两个页面里面跳转」）。
+    //
+    // 三次的共同形状：**来处变量落进了「自己」或「自己的下游」**。
+    // 三次的修法都是"再补一个 if 排除它"—— 而只要靠人记得写 if，就一定会有第四次。
+    //
+    // 所以改成结构性保证：
+    //   · navDownstream 声明每页的**下游页面**（下游的返回指向上游 ⇒ 上游绝不能把下游记成来处）
+    //   · navEnter 只记「既不是自己、也不是自己下游」的来处 —— 判断只有这一处
+    //   · navLeave 发现来处非法（空/自己/下游）就退到 fallback，**绝不原地不动**
+    //     （「按了返回但页面没动」是最难查的症状：箭头在、点得着、也不报错）
+    //
+    // 🔴 2026-10-07 第二例事故（用户报的「播放页↔设置页」）暴露了这张表的关键点：
+    //    它列的是**「返回指向谁」**，不是「谁能到达谁」。只要两页**互相可达**，
+    //    就必须把对方列进自己的下游，否则会互指成环。
+    //    · player ↔ queue：queue 的返回是 player ⇒ player 的下游含 queue（第一例）
+    //    · player ↔ settings：**曾经**设置页有 ▶ 回播放页、播放页有 ⚙ 去设置页
+    //      ⇒ 互为下游 ⇒ 死循环。修法是**去掉设置页的 ▶**（用户决定），
+    //      于是 settings 的下游只剩 login，不再与 player 成环。
+    //    ⚠️ 教训：加一个「跨页跳转按钮」时，先问"这两页会不会互相可达"。
+    property var navDownstream: ({
+        "player":   ["queue"],    // queue 的返回就是回 player ⇒ player 不能把 queue 记成来处
+        "settings": ["login"]     // login 的返回就是回 settings ⇒ settings 不能把 login 记成来处
+    })
+    // 来处非法时的退化目标。必须是**根页面**，保证一定能退出去。
+    property var navFallback: ({
+        "player":   "search",
+        "settings": "playlists",
+        "addpick":  "search"
+    })
+    // 来处槽位。⚠️ `backPage` 的属性声明在文件顶部（页面属性区 :356），**不要在这里再声明一次**
+    //    —— 2026-10-07 重构时就多写了一遍，被 tools/qml-dupdecl.js 当场抓住
+    //    （重复 property 会让整个插件页打不开，正是 2026-10-03 那次事故的形状）。
+    //    两个新槽位也统一挪到顶部，与 backPage 放一起。
+    function navGet(target) {
+        if (target === "settings") return settingsBackPage
+        if (target === "player")   return playerBackPage
+        if (target === "addpick")  return backPage
+        return ""
+    }
+    function navSet(target, v) {
+        if (target === "settings")      settingsBackPage = v
+        else if (target === "player")   playerBackPage = v
+        else if (target === "addpick")  backPage = v
+    }
+    // 来处是否合法：非空、不是自己、不是自己的下游。
+    function navOriginOk(target, v) {
+        if (!v || v === target) return false
+        var down = navDownstream[target] || []
+        for (var i = 0; i < down.length; i++) if (v === down[i]) return false
+        return true
+    }
+    // 🔴 结构性防环（2026-10-07 第二例事故后补）。**不依赖 navDownstream 表**。
+    //
+    // 判据：若「来处」已经把我记成**它的**来处，那 `from → target` 会闭合成 2-环。
+    //   例：player→settings 时 settingsBackPage=player；
+    //       接着 settings→player 时 playerBackPage 若记成 settings ⇒
+    //       player↔settings 互指，连按返回永远在两者间跳（用户报的就是这个）。
+    //   这里直接**拒绝记录**这样的来处 ⇒ target 保留上一个有效来处 ⇒ 返回能真的退出去。
+    //
+    // 为什么不能只靠 navDownstream 表：那张表要人**手工枚举**「谁是谁的下游」，
+    //   而本次事故正是漏了一条边（player↔settings 互为下游）造成的。
+    //   这条守卫只看向量本身，谁忘了维护表都拦得住 —— 这才是"结构性"。
+    function navWouldCycle(target, from) {
+        return navGet(from) === target
+    }
+    // 进入 target：记录合法来处（不合法就不记，保留上一次的有效来处），然后切页。
+    function navEnter(target) {
+        var from = page
+        if (navOriginOk(target, from) && !navWouldCycle(target, from)) navSet(target, from)
+        page = target
+    }
+    // 从 target 返回：来处非法就退到 fallback。
+    function navLeave(target) {
+        var v = navGet(target)
+        page = navOriginOk(target, v) ? v : (navFallback[target] || "search")
+    }
+
+    // 设置页：从播放页/本地页/搜索页/歌单页的齿轮进入。
+    // ⚠️ 在设置页上再点一次齿轮**不再覆盖来处**（旧写法会写成 "settings" ⇒ 自锁）。
+    function openSettings() { navEnter("settings") }
+    // 分派式返回：登录页是设置页的下游，固定回设置页；其余回"进设置前的那个页"。
     function goBack() {
         if (page === "login") { page = "settings"; return }
-        page = settingsBackPage.length ? settingsBackPage : "playlists"
+        navLeave("settings")
     }
-    // 网易云账号页。从设置页进入；返回回到设置页（**不再动 backPage**）。
+    // 网易云账号页。只从设置页进入；返回固定回设置页。
     function openLogin() { page = "login" }
     function goSearch() { page = "search" }
-    // 🔴 播放页的「来处」必须**单独记一份**，不能复用 backPage —— 理由与 settingsBackPage 相同：
-    //    backPage 是加歌页在用，曾被 openLogin 污染成 "settings"，导致 goBack() 把自己赋给
-    //    自己、用户永远卡在设置页出不去。同一个变量被两个功能复用就是那次事故的根因。
-    property string playerBackPage: ""
-    function gotoPlayer() {
-        // 只在「进入前」记录一次。已经在播放页时（连点、或播放页内再触发）不覆盖，
-        // 否则 playerBackPage 会变成 "player"，返回就成了停在原地。
-        if (page !== "player") playerBackPage = page
-        page = "player"
-    }
-    function goPlayerBack() {
-        // 自守卫：万一将来新增入口忘了排除 player，也退化成回搜索页而不是"返回了但没动"。
-        page = (playerBackPage && playerBackPage !== "player") ? playerBackPage : "search"
-    }
+    // 播放页：从搜索/本地/歌单/详情/匹配页进入。
+    // 🔴 从**播放列表（queue）**返回时 page === "queue" ⇒ 它在下游名单里 ⇒ 不记来处，
+    //    于是 playerBackPage 保持"进播放列表之前"的那个页面 ⇒ 再按返回就能真的退出去。
+    //    这正是「播放页 ↔ 播放列表 互相跳转」那个 bug 的修法（且现在是结构性保证）。
+    function gotoPlayer() { navEnter("player") }
+    function goPlayerBack() { navLeave("player") }
     // 下拉面板的音乐卡片被点开时，由 MediaBridge 调回来（页面还活着的情况）
     function openPlayer() { gotoPlayer() }
 
@@ -3258,8 +3409,9 @@ Item {
     // （否则停在最后一首时 ▶ 会突然消失，看着像 bug）。currentSong 只在开播时赋值、
     // 从不清空，正好是"这次会话播过歌"的意思。
     property bool hasNowPlaying: currentSong !== null
-    // 队列页是播放页的下游，返回一律回播放页 —— 不单独记"来处"，
-    // 省一个状态变量就少一处能自污染的地方（backPage 那次事故就是这么来的）。
+    // 队列页是播放页的下游，返回一律回播放页 ⇒ **它自己不记来处**（少一个槽位）。
+    // 防护来自 navDownstream：从队列页返回会调 gotoPlayer()，而 navEnter 会拒绝
+    // 把 "queue" 记成 player 的来处 ⇒ playerBackPage 保持"进播放列表之前"的页面。
     function openQueue() { page = "queue" }
     function goQueueBack() { gotoPlayer() }
     // 点队列里的某一首：直接跳播，并带回播放页（与主流播放器一致，点完就能看到封面/歌词）
@@ -3274,12 +3426,14 @@ Item {
     function goLocal() { page = "local"; refreshLocal() }
     // 歌单页与搜索页/本地页是平级的第三个根页面，所以不做 backPage 记录（返回 = 退出插件）。
     function goPlaylists() { page = "playlists" }
-    // 进详情页。⚠️ 同时把 backPage 设成歌单页 —— 详情页的返回箭头才会回到列表，
-    // 而不是回到"上个页面"（那可能正是用户刚点进来的地方，看起来像返回没反应）。
+    // 进详情页。⚠️ 详情页的来处**恒为歌单页**（它是歌单页的子页），所以返回直接硬编码回列表，
+    //    不记来处 —— 少一个槽位就少一处能自污染的地方。
+    //    （旧写法在这里写 `backPage = "playlists"`，但那个槽位是 **addpick 在用**的：
+    //      closePlaylistDetail 根本不读它 ⇒ 那是一句**死写**，却会污染加歌页的来处。
+    //      2026-10-07 清理。）
     function openPlaylist(id) {
         if (!playlistById(id)) { toast.show("歌单不存在"); return }
         plCurId = id
-        backPage = "playlists"
         page = "playlist"
     }
     // 关详情页。清掉 plCurId，否则下次从别处进歌单页时 plView 还是旧歌单的数据。
@@ -3291,6 +3445,9 @@ Item {
     // 给「公式覆盖不到」的文件补一个网易云身份：被改过名的、别的工具下的。
     // 搜索词**预填**成从文件名反推的「歌名 歌手」（parseLocalScan 已经算好了），
     // 所以多数情况不用打字：点一下搜、再点一条结果即可。
+    // 手动匹配页（本地页 → 匹配页）。来处**恒为本地页**，返回硬编码回 local，
+    // 不记来处。（旧写法 `backPage = "local"` 同样是**死写** —— closeMatch 不读它，
+    //  却会污染加歌页的来处。2026-10-07 清理。）
     function openMatch(i) {
         var rec = localList[i]
         if (!rec) return
@@ -3298,7 +3455,6 @@ Item {
         matchQuery = ((rec.name || "") + " " + (rec.artist || "")).trim()
         matchResults = []
         matchBusy = false
-        backPage = "local"
         page = "match"
     }
 

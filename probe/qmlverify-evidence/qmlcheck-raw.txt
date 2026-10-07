@@ -1,0 +1,176 @@
+This plugin does not support createPlatformOpenGLContext!
+
+qml: GD_SYSMEDIA mediaPlayerManager=no ; mediaManager=no ; soundCenter=no ; qmlGlobal=no ; musicPlayer=no ; YEnum=no ; YMediaEntity=no ; shell=no ; pluginManager=no ; mediaSession=no
+
+qml: CHK hasBackSignal=true
+
+qml: CHK hasExitPlugin=true
+
+qml: CHK ips=["104.18.0.1","104.17.0.1","104.19.0.1","104.20.0.1","104.16.0.1",""]
+
+qml: CHK lrc=[{"time":1.5,"text":"hello"},{"time":62,"text":"last"}]
+
+qml: CHK apicmd=rm -f /tmp/gdtest.out; if [ ! -s /tmp/gdtest.out ]; then r=$(LC_ALL=C curl -s --max-time 6 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' --resolve 'music-api.gdstudio.xyz:443:104.18.0.1' 'https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=test&count=1' 2>/dev/null); case "$r" in "["*|"{"*) printf '%s' "$r" > /tmp/gdtest.out;; esac; fi; if [ ! -s /tmp/gdtest.out ]; then r=$(LC_ALL=C curl -s --max-time 6 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' --resolve 'music-api.gdstudio.xyz:443:104.17.0.1' 'https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=test&count=1' 2>/dev/null); case "$r" in "["*|"{"*) printf '%s' "$r" > /tmp/gdtest.out;; esac; fi; if [ ! -s /tmp/gdtest.out ]; then r=$(LC_ALL=C curl -s --max-time 6 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 'https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name=test&count=1' 2>/dev/null); case "$r" in "["*|"{"*) printf '%s' "$r" > /tmp/gdtest.out;; esac; fi; printf '%s' 'GDDONE9Z' >> /tmp/gdtest.out
+
+qml: CHK playerStart=alive=0; if [ -S /tmp/gdmusic.sock ]; then LC_ALL=C '/userdisk/PenMods/plugins/gdmusic/bin/gdipc.pl' '/tmp/gdmusic.sock' pid > /tmp/gdmusic/probe.txt 2>/dev/null; if grep -q '^[0-9]' /tmp/gdmusic/probe.txt 2>/dev/null; then alive=1; fi; fi; if [ "$alive" = 1 ]; then exit 0; fi; rm -f /tmp/gdmusic.sock; mkdir -p /tmp/gdmusic; nohup /userdisk/mpv/mpv --no-video --force-window=no --idle=yes --keep-open=no --demuxer-max-bytes=8MiB --input-ipc-server=/tmp/gdmusic.sock --script=/userdisk/PenMods/plugins/gdmusic/bin/gdnext.lua > /tmp/gdmusic_mpv.log 2>&1 & true
+
+qml: CHK msgLoad=i=0; while [ $i -lt 60 ]; do if [ -S /tmp/gdmusic.sock ]; then LC_ALL=C '/userdisk/PenMods/plugins/gdmusic/bin/gdipc.pl' '/tmp/gdmusic.sock' cmd script-message gd-load >/dev/null 2>&1; break; fi; i=$((i+1)); sleep 0.25; done; true
+
+qml: CHK ipcPause=LC_ALL=C '/userdisk/PenMods/plugins/gdmusic/bin/gdipc.pl' '/tmp/gdmusic.sock' cmd 'set_property' 'pause' 'true'
+
+qml: CHK wakeLockFile=/tmp/audio_wakelocks/gdmusic.lock
+
+qml: CHK luaScript=/userdisk/PenMods/plugins/gdmusic/bin/gdnext.lua
+
+qml: CHK queueJson={"list":[{"id":"5257138","name":"Don't Stop","artist":"A"},{"id":"509781655","name":"中文歌名","artist":"乙"}],"index":1,"source":"netease","quality":"320","ips":["104.18.0.1","104.17.0.1","104.19.0.1","104.20.0.1","104.16.0.1",""],"autoNext":true,"apiBase":""}
+
+qml: CHK queueJsonIdx2={"list":[{"id":"5257138","name":"Don't Stop","artist":"A"},{"id":"509781655","name":"中文歌名","artist":"乙"}],"index":2,"source":"netease","quality":"320","ips":["104.18.0.1","104.17.0.1","104.19.0.1","104.20.0.1","104.16.0.1",""],"autoNext":true,"apiBase":""}
+
+qml: CHK writeQ=mkdir -p /tmp/gdmusic; printf '%s' '{"list":[{"id":"5257138","name":"Don'\''t Stop","artist":"A"},{"id":"509781655","name":"中文歌名","artist":"乙"}],"index":1,"source":"netease","quality":"320","ips":["104.18.0.1","104.17.0.1","104.19.0.1","104.20.0.1","104.16.0.1",""],"autoNext":true,"apiBase":""}' > /tmp/gdmusic/queue.json; true
+
+qml: CHK now/playing playing=true paused=false queueIndex=0 pos=5.5 dur=100 song=-
+
+qml: CHK now/next    queueIndex=1 song=509781655 (期望 1/509781655)
+
+qml: CHK now/paused  paused=true playing=false (期望 true/false)
+
+qml: CHK now/loading playing=true status=解析播放地址…
+
+qml: CHK now/stopped playing=false paused=true status=播放结束 (期望 false/true/播放结束)
+
+qml: CHK now/fail    status=取不到播放地址（可能需会员）
+
+qml: GD_SYSMEDIA mediaPlayerManager=no ; mediaManager=no ; soundCenter=no ; qmlGlobal=no ; musicPlayer=no ; YEnum=no ; YMediaEntity=no ; shell=no ; pluginManager=no ; mediaSession=no
+
+qml: CHK sysmedia state=官方会话✗ 原厂✗ (qmlscene 期望 不可用)
+
+qml: CHK sysmedia line1=mediaPlayerManager=no
+
+qml: CHK sysmedia hasManagers=true
+
+qml: CHK dlDir=/userdisk/Music/GDMusic
+
+qml: CHK dlIndex=undefined
+
+qml: CHK sanitize a=a_b_c_d_e_f_g_h_i_j
+
+qml: CHK sanitize b=Don't Stop
+
+qml: CHK sanitize c=untitled
+
+qml: CHK localName=Don't Stop-甲、乙.mp3
+
+qml: CHK localPath=/userdisk/Music/GDMusic/Don't Stop-甲、乙.mp3
+
+qml: CHK localLrc=/userdisk/Music/GDMusic/Don't Stop-甲、乙.lrc
+
+qml: CHK localName slash=a_b-c_d.mp3
+
+qml: CHK sizeText 0=0 KB
+
+qml: CHK sizeText kb=4 KB
+
+qml: CHK sizeText mb=5.0 MB
+
+qml: CHK dlCmd=mkdir -p /userdisk/Music/GDMusic /tmp/gdmusic/parts /tmp/gdmusic/dl; rm -f '/tmp/gdmusic/parts/1.part' '/tmp/gdmusic/dl/1.st'; t=$(LC_ALL=C curl -sIL --max-time 20 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' 'https://example.com/a b.mp3' | sed -n 's/^[Cc]ontent-[Ll]ength:[ ]*//p' | tail -1 | tr -dc '0-9'); [ -n "$t" ] && printf 'total:%s' "$t" > '/tmp/gdmusic/dl/1.st'; if curl -sL --max-time 900 --connect-timeout 15 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'   -o '/tmp/gdmusic/parts/1.part' 'https://example.com/a b.mp3'; then   if [ -s '/tmp/gdmusic/parts/1.part' ]; then     mv '/tmp/gdmusic/parts/1.part' '/userdisk/Music/GDMusic/Don'\''t Stop-甲、乙.mp3';     printf 'ok:%s' "$(stat -c%s '/userdisk/Music/GDMusic/Don'\''t Stop-甲、乙.mp3')" > '/tmp/gdmusic/dl/1.st';   else rm -f '/tmp/gdmusic/parts/1.part'; printf 'fail:下载为空' > '/tmp/gdmusic/dl/1.st'; fi; else rm -f '/tmp/gdmusic/parts/1.part'; printf 'fail:网络中断' > '/tmp/gdmusic/dl/1.st'; fi; true
+
+qml: CHK scanCmd=(cd /userdisk/Music/GDMusic 2>/dev/null && gm='@@GDMUS@@'; sm='@@GMSIDE@@'; lm='@@GMLRC@@'; for f in *.mp3; do [ -e "$f" ] || continue; echo "$gm$(stat -c%s "$f")|$f"; done; for g in *.jpg *.png; do [ -e "$g" ] || continue; echo "$sm$g"; done; for l in *.lrc; do [ -e "$l" ] || continue; echo "$lm$l"; done); true
+
+qml: CHK downloaded(before)=false
+
+qml: CHK downloaded(after)=true
+
+qml: CHK findLocal=5242880
+
+qml: CHK scan n=3 (期望 3) [0]=稻香/周杰伦/3706924 [1]=没有歌手的歌/ [2]=歌|名/歌手 (期望 稻香/周杰伦/3706924、没有歌手的歌/、歌|名/歌手)
+
+qml: CHK playLocal page=player len=1 file=/userdisk/Music/GDMusic/Don't Stop-甲、乙.mp3
+
+qml: CHK aliveProbe=true (期望 true：靠要 pid 判活)
+
+qml: CHK notBareExists=true (期望 true：不许只有文件存在判据)
+
+qml: CHK rmStale=true (期望 true：僵尸先删)
+
+qml: CHK memGuard=true (期望 true：OOM 防线)
+
+qml: CHK noVolumeFlag=true (期望 true：音量由系统统一管)
+
+qml: CHK downloadSong noShell threw=false (期望 false)
+
+qml: CHK hist api=true/true/true/true (期望 true×4)
+
+qml: CHK histMax=20 (期望 20)
+
+qml: CHK hist loaded=["持久化往返"]
+
+qml: CHK hist dup=["周杰伦","晴天"] (期望 ["周杰伦","晴天"]：最后搜的排最前)
+
+qml: CHK hist blank=["周杰伦","晴天"] (期望仍是 2 条)
+
+qml: CHK hist rm=["晴天"] (期望 ["晴天"])
+
+qml: CHK hist searchWord kw=稻香 open=false threw=false (期望 稻香/false/false)
+
+qml: CHK hist clear=[] (期望 [])
+
+qml: CHK hist cap len=20 (期望 20) head=w29 (期望 w29)
+
+qml: CHK srcList=["netease"] (期望 ["netease"])
+
+qml: CHK srcValid ok=true/false/false (期望 true/false/false)
+
+qml: CHK srcValid dead=false/false/false (期望 false×3)
+
+qml: CHK srcCur=netease (期望 netease)
+
+qml: 音源 joox 已不在可用列表，回落 netease
+
+qml: CHK srcFallback=netease (期望 netease)
+
+qml: CHK tab goLocal page=local (期望 local)
+
+qml: CHK tab goSearch page=search (期望 search)
+
+qml: CHK hist persist=["持久化往返"]
+
+qml: CHK dlq order=["1","2","3"] (期望 [1,2,3])
+
+qml: CHK dlq view len=3 (期望 3) head=队列歌1 run=true pct=50 (期望 50)
+
+qml: CHK dlq pctNoTotal=-1 (期望 -1)
+
+qml: CHK dlq pctZero=0 (期望 0)
+
+qml: CHK dlq pctClamp=100 (期望 100)
+
+qml: CHK dlq tab=本地(↓3) (期望 本地(↓3))
+
+qml: CHK dlq cancel threw=false (期望 false) queue=["3"] (期望 [3]) tabAfter=本地(↓2) (期望 本地(↓2))
+
+qml: CHK dlq cmdTotal=true (期望 true)
+
+qml: CHK dlq cmdStage=true (期望 true：part 落缓存区、mv 才进歌库)
+
+qml: CHK dlq empty len=0 tab=本地 (期望 0 / 本地)
+
+qml: CHK dlparse A st=ok:9706605 sz=- (期望 ok:9706605 / -)
+
+qml: CHK dlparse B st=total:3706924 sz=486532 (期望 total:3706924 / 486532 —— 修复前 sz 会是空)
+
+qml: CHK dlparse C n=2 st3=total:1000 sz3=512 st4= sz4=- (期望 2 / total:1000 / 512 / '' / -)
+
+qml: CHK dlparse D n=0 (期望 0)
+
+qml: CHK pback inPage=player (期望 player，进入即切页)
+
+qml: CHK pback noSelfOverwrite=playlists (期望 playlists，已在播放页时不把自己记成来处)
+
+qml: CHK pback fromPlaylist=playlists (期望 playlists)
+
+qml: CHK pback fromLocal=local (期望 local)
+
+qml: CHK pback emptyFallback=search (期望 search)
+
+qml: CHK pback selfGuard=search (期望 search)
+

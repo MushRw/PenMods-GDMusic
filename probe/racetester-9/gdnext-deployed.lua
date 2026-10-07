@@ -93,47 +93,11 @@ local function read_file(p)
     return s
 end
 
--- 🔴 原子写：先写同目录的 .tmp，再 rename 覆盖目标。
---
--- 为什么必须这样（2026-10-07 静态审计 + 真机复现）：
---   旧实现是 io.open(p, "w") —— **截断式写**。`open(...,"w")` 会先把文件清零，
---   再写入内容。这中间存在一个「文件为 0 字节」的窗口 W。
---   而 QML 侧 MediaBridge.poll() 每秒 `cat now.json` 整份读一次，两者并发 ⇒
---   读到 0 字节 / 半截 JSON ⇒ JSON.parse 抛错 ⇒ o=null。
---   而 onNow 的分支②是 `if (!o || ...)` ⇒ 被当成「没在放」⇒ holdSession()
---   ⇒ 默认配置(holdOnStop=false) 执行 `release(); killMpv(); return`
---   ⇒ **正在放的歌被掐断、播放器进程被回收、面板卡片消失**。
---
---   本机两进程实测：29902 次读里 10137 次坏（33.9%，全是 0 字节）；
---   写窗口 W 本机 p95=0.83ms。两个 1 秒定时器不同频 ⇒ 相位会周期性扫过窗口，
---   ⇒ 命中是**时间问题**，不是运气问题。
---
---   真机验证（2026-10-07，设备 2AB2900000800514）：mpv 内置 Lua 5.2，
---   os.rename 可用，且**覆盖已存在文件成功**（两次连续 rename 均返回 true）
---   ⇒ 原子写方案在目标设备上可行。
---
---   rename 在同目录内是原子操作：读者要么看到完整的旧内容，要么看到完整的新内容，
---   永远不会看到 0 字节或半截。这才是「QML 读 / lua 写」这个跨进程协议的正确答案。
---
--- ⚠️ tmp 必须与目标**同目录**：跨文件系统的 rename 会退化成「复制+删除」，不原子。
 local function write_file(p, s)
-    local tmp = p .. ".tmp"
-    local f = io.open(tmp, "w")
+    local f = io.open(p, "w")
     if not f then return false end
-    local ok_write = f:write(s)
+    f:write(s)
     f:close()
-    if not ok_write then
-        os.remove(tmp)
-        return false
-    end
-    local ok = os.rename(tmp, p)
-    if not ok then
-        -- rename 失败（极罕见：只读文件系统 / 目标被占用）⇒ 清掉 tmp 并如实返回 false。
-        -- 不退回「直接写目标」：那等于把撕裂窗口又放回来，宁可这一拍不更新状态
-        -- （QML 侧有 8 秒 ts 过期兜底，且下一拍还会再试）。
-        os.remove(tmp)
-        return false
-    end
     return true
 end
 

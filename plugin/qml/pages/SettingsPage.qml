@@ -16,8 +16,15 @@ Rectangle {
         title: "设置"
         showSettings: false
         onBackClicked: if (settingsPage.controller) settingsPage.controller.goBack()
-        showPlayer: settingsPage.controller ? settingsPage.controller.hasNowPlaying : false
-        onPlayerClicked: if (settingsPage.controller) settingsPage.controller.gotoPlayer()
+        // 🔴 设置页**不放「回播放页」按钮**（2026-10-07 用户要求去掉）。
+        //    原因不只是"少一个按钮"——它是一处**互相可达**：
+        //      播放页 --⚙--> 设置页 --▶--> 播放页
+        //    两页互为下游 ⇒ 无论谁把谁记成来处，都会形成
+        //      「播放页 → 设置 → 播放页 → 设置 …」连按返回永远出不去的死循环。
+        //    （这是本文件第二例同形事故；第一例是 播放页 ↔ 播放列表。）
+        //    去掉这条边之后，设置页只能靠返回键回**真正的上游**，结构上不可能再互指。
+        //    ⚠️ 不要因为"方便"再把 showPlayer 打开 —— 那会立刻让死循环回来。
+        showPlayer: false
     }
 
     Flickable {

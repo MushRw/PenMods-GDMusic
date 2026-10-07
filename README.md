@@ -64,9 +64,30 @@ probe/           探针：源码级结构断言 + 真机 qmlscene 验证
 tools/
   deploy.sh      推送 + 门禁 + 清缓存 + 重启
   qml-dupdecl.js 重复 property/function/id 声明检查
+  test-qml-dupdecl.js / test-reason-flow.js / test-onnow-order.js
+                 门禁自检（挂进 deploy.sh，见「开发与调试」）
   gen_icon.py    重新生成 icon.png
 docs/            与上游框架相关的开发笔记 / issue 草稿
 ```
+
+### 跨进程状态文件必须原子写（`now.json`）
+
+`/tmp/gdmusic/now.json` 是 **lua 写、QML 读**的跨进程通道（每秒各一拍）。
+写侧**必须**走「写同目录 `.tmp` → `os.rename` 覆盖」，不能直接 `io.open(p,"w")`：
+后者是**截断式写**，`open` 到 `close` 之间存在「文件为 0 字节」的窗口，
+读者会读到空文件 ⇒ `JSON.parse` 抛错 ⇒ 被当成「没在放」⇒ 正在放的歌被掐断。
+
+真机实测（2026-10-07，词典笔 YDP02X）：
+
+| 写实现 | 每次读的坏读率 |
+|---|---|
+| 截断式写（旧） | 0.054%（隔离夹具）/ 0.0136–0.0291%（真 now.json，n 最大 386 万） |
+| 原子写（现） | **0.000000%**（真 now.json + 真 mpv，12 万次读） |
+
+⚠️ 一个反直觉的点：原子写**并没有把写窗口 W 变小**（in-situ p50 354µs vs 旧 328µs，
+因为多了一次 rename）。它的收益是**消除了可被观察到的中间态** ——
+`.tmp` 写完之前，目标文件始终是完整的旧内容。所以验证要看**坏读率**，不是看 W。
+QML 侧另有一层容忍（读到坏数据时沿用上一拍状态）作纵深防御，见 `test-onnow-order.js`。
 
 ## 开发与调试
 
@@ -87,15 +108,36 @@ bash probe/sidecar-device.sh # 真机：把 QML 推上去用 qmlscene 加载，�
   `stopText`/`notifyFailure` 求值，钉住「取流失败只提示一次」「user/end 不提示」。
   这类"每秒判一次"的逻辑最容易退化成每次轮询都弹一次骚扰，或把用户主动停报成错误。
   同样**已挂进门禁**。
-- ⚠️ **调用宿主 `qmlGlobal.showToast` 必须传满两个实参**：宿主签名是
-  `void showToast(const std::string&, const QColor& theme = "#1A1B1F")`
-  （PenMods `src/common/Utils.h:30`），但 **QML 看不见 C++ 的默认参数** ——
-  moc 注册的是完整参数表，少传一个会抛 `Insufficient arguments`。
-  证据：`neo/factory-qml` 里 67 处 `qmlGlobal.showToast(...)` **全部传 2 个**。
-  这类错误特别阴：调用点外面套着 `try/catch`（toast 绝不能影响播放控制），
-  异常被静默吞掉 ⇒ 用户什么也看不到，日志只有一行 `toast failed`。
-  `test-reason-flow.js` 的假 `showToast` **刻意校验实参个数**来防它 ——
-  夹具若对参数个数没意见，就永远测不出这类回归（第一版夹具正是如此）。
+- `node tools/test-onnow-order.js`（11 项）：钉住 `MediaBridge.onNow` 的**分支顺序**。
+  为什么把"顺序"单独当断言对象：`now.json` 是 lua 写、QML 读的跨进程文件，
+  一旦读到 0 字节/半截，旧代码会把它当成"没在放"⇒ `release()+killMpv()`
+  ⇒ **正在放的歌被掐断**。修法是「读到坏数据时沿用上一拍状态」，但这条容忍
+  **必须排在"播放器已死"的回收分支之后** —— 否则「读不到 **且** mpv 已死」
+  两个判据都够不到，会话永不释放。两段代码各自都对，只有顺序错，所以必须钉顺序。
+  （这个回归是 2026-10-07 修 P1 时 Lead 自己写反引入的，同轮被该测试抓住。）
+- ⚠️ **调用宿主 `qmlGlobal.showToast` 必须传满两个实参** —— 因为它是**信号**，
+  不是方法。真机实测（2026-10-07）：
+  - `qmlGlobal.showToast` = `YGlobal` 的 **signal** `showToast(QString qsMsg, QColor clrBg)`。
+    证据：`neo/factory-qml/qml/commons/YToast.qml:61-67` 用
+    `Connections { target: qmlGlobal; function onShowToast(qsMsg, clrBg) }`（**Connections 只能连信号**）；
+    宿主 moc 元对象字符串表里 `YGlobal → showToast → qsMsg → clrBg` 参数名紧邻。
+  - 少传实参的行为**分三种**（真机实测，同一探针内对照）：
+    | 可调用对象 | 少传实参 | 缺的形参 |
+    |---|---|---|
+    | QML JS **函数** | 不抛 | `undefined` |
+    | QML **信号** | **抛 `Insufficient arguments`**，处理器完全不执行 | — |
+    | C++ `Q_INVOKABLE`（该参数无默认值） | 抛 | — |
+  - ⇒ 抛不抛**只取决于该参数在 C++ 侧有没有默认值**；QML 其实**看得见**默认参数
+    （Qt 的 `nextItemInFocusChain(bool forward = true)` 零参调用成功，且真的应用了默认值）。
+  - ⚠️ 别拿 `PenMods/src/common/Utils.h:30` 的 `mod::showToast(std::string, QColor = "#1A1B1F")`
+    当作依据 —— 那是**另一个函数**（`_ZN3mod9showToastE...`），
+    `qmlGlobal` 的真身是 `_ZN7YGlobal9showToastERK7QStringRK6QColor`（`QString` 而非 `std::string`），
+    它有没有默认值**未能从设备二进制证明**（无 `qmlplugindump`，`YGlobal` 在本地只是空壳）。
+    但 `YGlobal` 是信号，而**信号声明不能有默认参数** ⇒ 必须传满。
+  - 这类错误特别阴：调用点外面套着 `try/catch`（toast 绝不能影响播放控制），
+    异常被静默吞掉 ⇒ 用户什么也看不到，日志只有一行 `toast failed`。
+    `test-reason-flow.js` 的假 `showToast` **刻意校验实参个数**来防它 ——
+    夹具若对参数个数没意见，就永远测不出这类回归（第一版夹具正是如此）。
 - 真机探针需要设备在线，脚本读 `ADB_SERIAL` 环境变量。
 - `probe/shot.sh` 的段 E 断言另一个仓库的 `ScreenGrabber.cpp`，只在 PenMods 的
   `tmp/quick-setting-port` 分支上。缺该文件时它打印 SKIP 并 **`exit 2`**

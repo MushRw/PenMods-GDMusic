@@ -17,17 +17,18 @@ LP="$ROOT/plugin/qml/pages/LocalPage.qml"
 SP="$ROOT/plugin/qml/pages/SearchPage.qml"
 DP="$ROOT/plugin/qml/pages/PlaylistDetailPage.qml"
 IB="$ROOT/plugin/qml/components/IconButton.qml"
+TB="$ROOT/plugin/qml/components/TitleBar.qml"
 DIR="$ROOT/plugin/qml/qmldir"
 NODE="${NODE:-}"
 [ -x "$NODE" ] || NODE=$(command -v node)
-for f in "$QML" "$AP" "$PP" "$LP" "$SP" "$DP" "$IB" "$DIR"; do
+for f in "$QML" "$AP" "$PP" "$LP" "$SP" "$DP" "$IB" "$TB" "$DIR"; do
     [ -f "$f" ] || { echo "找不到 $f"; exit 1; }
 done
 
-"$NODE" - "$QML" "$AP" "$PP" "$LP" "$SP" "$DP" "$IB" "$DIR" <<'JS'
+"$NODE" - "$QML" "$AP" "$PP" "$LP" "$SP" "$DP" "$IB" "$TB" "$DIR" <<'JS'
 'use strict'
 const fs = require('fs')
-const [qmlPath, apPath, ppPath, lpPath, spPath, dpPath, ibPath, dirPath] = process.argv.slice(2)
+const [qmlPath, apPath, ppPath, lpPath, spPath, dpPath, ibPath, tbPath, dirPath] = process.argv.slice(2)
 
 const src = fs.readFileSync(qmlPath, 'utf8')
 const ap  = fs.readFileSync(apPath,  'utf8')
@@ -36,11 +37,13 @@ const lp  = fs.readFileSync(lpPath,  'utf8')
 const sp  = fs.readFileSync(spPath,  'utf8')
 const dp  = fs.readFileSync(dpPath,  'utf8')
 const ib  = fs.readFileSync(ibPath,  'utf8')
+const tb  = fs.readFileSync(tbPath,  'utf8')
 const dir = fs.readFileSync(dirPath, 'utf8')
 
 const clean = s => s.replace(/^[ \t]*\/\/.*$/gm, '')
 const qmlC = clean(src), apC = clean(ap), ppC = clean(pp),
-      lpC = clean(lp), spC = clean(sp), dpC = clean(dp), ibC = clean(ib)
+      lpC = clean(lp), spC = clean(sp), dpC = clean(dp), ibC = clean(ib),
+      tbC = clean(tb)
 
 let pass = 0
 const fails = []
@@ -99,16 +102,19 @@ const open = grab(qmlC, 'openAddPick')
 check(/addTargetOf\(song\)/.test(open),        'B4 openAddPick 没先归一化载体')
 check(/addPickSong\s*=\s*t/.test(open),        'B5 openAddPick 没设 addPickSong')
 check(/addPickStep\s*=\s*"list"/.test(open),   'B6 openAddPick 没把 step 复位成 list')
-// ⚠️ 必须带 page !== "addpick" 的守卫：重复打开会把 backPage 写成 "addpick"，
-//    之后「关闭」永远回到本页 ⇒「怎么按返回都出不去」，且只在特定顺序下出现。
-check(/if \(page !== "addpick"\)\s*backPage\s*=\s*page/.test(open),
-      'B7 openAddPick 无条件写 backPage ⇒ 重复打开后返回会永远回到加歌页')
-check(/page\s*=\s*"addpick"/.test(open),       'B8 openAddPick 没切页')
+// ⚠️ 2026-10-07 导航重构后：这条守卫从「手写 if」变成了 navEnter 的结构性保证
+//    （navOriginOk 会拒绝「自己 / 自己的下游」当来处）。
+//    所以断言改成检查它走了 navEnter，而**不是**检查那个 if 还在 —— 否则重构后必然假失败。
+//    行为层面的等价性由下面 C19/C20 的求值断言保证（重复打开后 backPage 仍是 local）。
+check(/navEnter\("addpick"\)/.test(open),
+      'B7 openAddPick 没走 navEnter ⇒ 重复打开会污染来处，之后返回永远回到加歌页')
+check(/page\s*=\s*"addpick"/.test(open) || /navEnter\("addpick"\)/.test(open),
+      'B8 openAddPick 没切页')
 
 const close = grab(qmlC, 'closeAddPick')
 check(/addPickSong\s*=\s*null/.test(close),   'B9 closeAddPick 没清 addPickSong（下次进来残留上一首）')
 check(/addPickStep\s*=\s*"list"/.test(close), 'B10 closeAddPick 没复位 step')
-check(/page\s*=\s*backPage/.test(close),      'B11 closeAddPick 没回到来处')
+check(/navLeave\("addpick"\)/.test(close),    'B11 closeAddPick 没回到来处（应走 navLeave）')
 
 const dop = grab(qmlC, 'doAddPick')
 check(/addSongToPlaylist\(id,\s*addPickSong\)/.test(dop), 'B12 doAddPick 没把载体交给 addSongToPlaylist')
@@ -135,6 +141,10 @@ const PRELUDE = [
     'var playlistMax = 20, playlistSongMax = 300, playlistNameMax = 24',
     'var source = "netease"',
     'var page = "", backPage = "", editTarget = "", saveCalls = 0, warns = []',
+    // 导航层需要两张表 + 另外两个槽位（与 main.qml 保持同源；改一处要一起改）
+    'var settingsBackPage = "", playerBackPage = ""',
+    'var navDownstream = ({ "player": ["queue"], "settings": ["login"] })',
+    'var navFallback = ({ "player": "search", "settings": "playlists", "addpick": "search" })',
     'var toast = { last: "", show: function (m) { this.last = String(m) } }',
     'var keyboard = { opened: null, calls: 0, open: function (t) { this.opened = t; this.calls++ } }',
     'var console = { warn: function (m) { warns.push(String(m)) }, log: function () {}, error: function () {} }',
@@ -162,6 +172,13 @@ const PRELUDE = [
     grab(qmlC, 'cleanPlaylistName'),
     grab(qmlC, 'createPlaylist'),
     grab(qmlC, 'beginCreatePlaylist'),
+    // 导航层（2026-10-07 重构后 openAddPick/closeAddPick 内部走 navEnter/navLeave）
+    // ⚠️ 不把这一层带进来，夹具会 ReferenceError —— 这正是"实现抽了层、夹具不跟"的典型症状。
+    grab(qmlC, 'navGet'),
+    grab(qmlC, 'navSet'),
+    grab(qmlC, 'navOriginOk'),
+    grab(qmlC, 'navEnter'),
+    grab(qmlC, 'navLeave'),
     grab(qmlC, 'openAddPick'),
     grab(qmlC, 'closeAddPick')
 ].join('\n')
@@ -348,10 +365,23 @@ check(/onDismissed:\s*root\.plNewSong\s*=\s*null/.test(qmlC),
 // ============================================================
 // F. 四个入口
 // ============================================================
-check(/kind:\s*"plus"/.test(ppC), 'F1 播放页没有 plus 按钮')
-check(/objectName:\s*"gdPlayerAddBtn"/.test(ppC), 'F2 播放页加歌按钮没有 objectName')
-check(/openAddPick\(playerPage\.controller\.currentSong\)/.test(ppC),
-      'F3 播放页加歌按钮没传 currentSong')
+// ⚠️ 2026-10-07 A1 布局改动：加歌按钮从**播放页右侧竖排**移到**顶栏**（TitleBar）。
+//    原因：320×170 上右侧每多一列按钮就吃掉约 40px 歌词宽（≈4 汉字/行），
+//    而歌词是播放页的核心内容。所以 F1~F3 的断言对象从 PP（PlayerPage）改为 TB（TitleBar），
+//    并新增 F5 断言播放页确实把它打开了（showActions: true）—— 否则按钮声明在顶栏、
+//    播放页却没打开它，入口就**静默消失**了（比"按钮位置不对"更糟）。
+check(/kind:\s*"plus"/.test(tbC), 'F1 顶栏没有 plus 按钮（加歌入口）')
+check(/objectName:\s*"gdPlayerAddBtn"/.test(tbC), 'F2 加歌按钮没有 objectName')
+check(/onClicked:\s*bar\.addClicked\(\)/.test(tbC),
+      'F3 加歌按钮没接到 TitleBar 的 addClicked 信号')
+// 播放页必须把这三个动作键打开，且把信号接到正确的 controller 方法上
+check(/showActions:\s*true/.test(ppC), 'F5 播放页没有打开顶栏动作键（showActions: true）')
+check(/onAddClicked:[\s\S]{0,200}?openAddPick\(playerPage\.controller\.currentSong\)/.test(ppC),
+      'F6 播放页没把 addClicked 接到 openAddPick(currentSong)')
+check(/onDownloadClicked:[\s\S]{0,200}?downloadSong\(playerPage\.controller\.currentSong\)/.test(ppC),
+      'F7 播放页没把 downloadClicked 接到 downloadSong(currentSong)')
+check(/onQueueClicked:[\s\S]{0,120}?openQueue\(\)/.test(ppC),
+      'F8 播放页没把 queueClicked 接到 openQueue()')
 check(/k === "plus"/.test(ibC), 'F4 IconButton 不认识 plus（点了画不出图形）')
 // ⚠️ 不要写死注释字符串去比对（原写法钉住 "play | pause | ... | plus"，
 //    2026-10-06 加 queue 时立刻假失败一次）。改成从【实际支持的分支】反推：

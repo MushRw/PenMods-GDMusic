@@ -97,6 +97,11 @@ QtObject {
     property string lastReason: ""  // 最近一次停止的 now.json reason；holdSession 靠它决定文案
     property string lastStopLine: "" // 最近一次停止的文案（fail 时留给保留期在卡片上显示）
     property string pendingStopLine: "" // 交给 release() 的停止文案（否则会被它覆写掉，见 release）
+    // 连续读到坏 now.json（0 字节 / 半截 / NOFILE）的拍数。只用于诊断与心跳日志，
+    // **不参与任何判定** —— 判据是「这一拍 readOk 与否」，不是累计到多少次才动手。
+    // 存在的意义：真出问题时能在 mediabridge.log 里看到「曾经连续坏读 N 拍」，
+    // 而不是只有一个神秘的「卡片闪了一下」。
+    property int    badReads: 0
     property bool   logStarted: false
 
     // --- 停播后的「保留期」（可选，**默认关**）---
@@ -236,8 +241,12 @@ QtObject {
                 var parts = raw.split("@@")
                 var out = String(parts[0] || "").trim()
                 var o = null
+                // 🔴 readOk 区分「这一拍读到了有效状态」与「读到空/半截/NOFILE」。
+                //    两者在下面 onNow 里的处理**必须不同** —— 旧代码把两者都当成 o=null，
+                //    于是「读到坏数据」和「确实没在放」被混为一谈，后果见 onNow 分支②。
+                var readOk = false
                 if (out.length && out.charAt(0) === "{") {
-                    try { o = JSON.parse(out) } catch (e) { o = null }
+                    try { o = JSON.parse(out); readOk = true } catch (e) { o = null; readOk = false }
                 }
                 // 🔴 解析 socket 存活标志时**必须先 trim**。
                 // 命令输出形如 `<换行>@@<换行>S<换行>`，所以 parts[1] = "\nS\n"，
@@ -249,11 +258,11 @@ QtObject {
                 var alive = (parts.length < 2)
                     ? bridge.mpvAlive                        // 分隔符后半段也缺：沿用上一拍
                     : (String(parts[1]).trim().charAt(0) === "S")
-                bridge.onNow(o, alive)
+                bridge.onNow(o, alive, readOk)
             })
     }
 
-    function onNow(o, alive) {
+    function onNow(o, alive, readOk) {
         tick++
         mpvAlive = (alive === undefined) ? true : !!alive
         if (tick % 30 === 0)
@@ -272,11 +281,46 @@ QtObject {
         //    里主动回收的（停播就回收，不留进程）。这时绝不能交还会话，否则卡片当场
         //    消失，又回到「停播后只能重开插件才能再播」；用户按 ▶ 时由 resumeAt →
         //    ensurePlayer 冷启动回来即可。
+        //
+        // 🔴 分支① 必须**排在坏读容忍之前**（2026-10-07 修正）。
+        //    它是「播放器已死」唯一的回收路径，且判据是 socket 存活（alive），
+        //    **不依赖 now.json 是否可读**。若把坏读容忍写在它前面，就会出现：
+        //    「now.json 暂时读不到（刚启动/刚被删）**且** mpv 已死」
+        //    ⇒ 两个判据都够不到 ⇒ owns 永远不被释放、卡片一直挂着。
+        //    这个顺序不是风格问题，是正确性问题。
         if (owns && !mpvAlive && !holdTimer.running) {
             status = "播放器已退出"
             release()
             return
         }
+
+        // 🔴 「读到坏数据」≠「确实没在放」—— 这一区分是本函数的关键。
+        //
+        //   背景（2026-10-07 审计 + 真机 A/B 实测）：lua 每拍重写 now.json，
+        //   QML 每拍整份读。旧 lua 用截断式写（io.open "w"）⇒ 存在「文件为 0 字节」
+        //   的窗口，读者会读到空/半截 ⇒ JSON.parse 抛错 ⇒ o=null。
+        //   而下面分支②的条件含 `!o` ⇒ 被当成「没在放」⇒ holdSession()
+        //   ⇒ 默认配置 release()+killMpv() ⇒ **正在放的歌被掐断**。
+        //
+        //   真机 A/B（同一台设备、同一测试脚本、各跑 8 秒）：
+        //     · 旧实现（截断式写）：24256 次读里 13 次坏（0.054%）
+        //     · 新实现（原子写）  ：24010 次读里  0 次坏（0.000%）
+        //
+        //   修法分两层：
+        //     1) lua 侧改成原子写（写 .tmp 再 rename）—— 根因修复，已真机验证；
+        //     2) 这里再做一层容忍：**读到坏数据时沿用上一拍状态**，不执行任何
+        //        破坏性动作。单靠第 1 层不够 —— 磁盘满 / rename 失败 / 未来又有人
+        //        改回非原子写，都会让坏读重现；而这一层的代价只是「这一拍不更新」。
+        if (readOk === false) {
+            // 只在**正在播放**时算异常；没持有会话时静默（启动初期文件还没写出来）
+            if (owns) {
+                badReads++
+                if (badReads === 1 || badReads % 30 === 0)
+                    log("bad read #" + badReads + "（沿用上一拍状态，不判定）")
+            }
+            return
+        }
+        badReads = 0
 
         // ② 没在放（人为停播 / 队列播完 / mpv 刚起来）：
         //    **刻意不交还会话** —— 会话一交还，宿主的音乐卡片就消失、面板回落，
@@ -457,14 +501,25 @@ QtObject {
         if (!globalRef || !globalRef.showToast) return
         var msg = String(text || "").trim()
         if (!msg.length) msg = "取不到播放地址"
-        // 🔴 必须传**两个**实参。宿主签名是 C++ 侧
-        //    `void showToast(const std::string&, const QColor& theme = "#1A1B1F")`
-        //    （PenMods/src/common/Utils.h:30），但 **QML 看不见 C++ 的默认参数** ——
-        //    moc 注册的是完整参数表，少传一个会抛 "Insufficient arguments"。
-        //    证据：neo/factory-qml 里 `qmlGlobal.showToast(...)` 共 67 处调用，
-        //    **全部传 2 个实参**（含 3 处跨行写法，逐个数过），没有一处只传 1 个。
+        // 🔴 必须传**两个**实参 —— 因为 `qmlGlobal.showToast` 是**信号**，不是方法。
+        //    真机实测（2026-10-07，词典笔，qmlscene）：
+        //      · `showToast` = YGlobal 的 signal `showToast(QString qsMsg, QColor clrBg)`。
+        //        证据：factory-qml 的 YToast.qml:61-67 用
+        //        `Connections { target: qmlGlobal; function onShowToast(qsMsg, clrBg) }`
+        //        —— Connections 只能连**信号**；宿主 moc 元对象字符串表里
+        //        `YGlobal → showToast → qsMsg → clrBg` 参数名紧邻。
+        //      · 少传实参的行为分三种（同一探针内对照实测）：
+        //          QML JS 函数 → 不抛，缺参为 undefined
+        //          QML 信号    → **抛 "Insufficient arguments"，处理器完全不执行**
+        //          C++ Q_INVOKABLE（该参数无默认值）→ 抛
+        //        ⇒ 抛不抛只取决于该参数在 C++ 侧有无默认值；而**信号声明不能有默认参数**
+        //          ⇒ 这里必须传满。
+        //    ⚠️ 别拿 PenMods/src/common/Utils.h:30 当依据 —— 那个
+        //      `mod::showToast(std::string, QColor = "#1A1B1F")` 是**另一个函数**
+        //      （符号 _ZN3mod9showToastE...），真身是
+        //      `_ZN7YGlobal9showToastERK7QStringRK6QColor`（QString 而非 std::string）。
         //    本函数第一版只传 msg ⇒ 唯一的失败可见通道会当场抛异常，
-        //    被下面的 catch 静默吞掉 ⇒ 用户什么都看不到，且日志只说"toast failed"。
+        //    被下面的 catch 静默吞掉 ⇒ 用户什么都看不到，且日志只说 "toast failed"。
         //    主题色用字面量而不是 Theme.danger：MediaBridge 是**必须能单独加载**的
         //    singleton（它一挂，所有 `import "."` 的文件全报 "Type MediaBridge unavailable"），
         //    为一个颜色去依赖另一个 singleton 不划算。字面量也是宿主侧惯用法

@@ -49,6 +49,28 @@ if ! "$NODE" "$R/tools/test-reason-flow.js" >"$REASONLOG" 2>&1; then
     cat "$REASONLOG"
     exit 1
 fi
+# onNow 分支顺序自检：钉住「分支①(播放器已死) 必须排在坏读容忍之前」。
+# 为什么需要它：2026-10-07 加坏读容忍时第一版顺序写反了，造出
+# 「now.json 读不到 **且** mpv 已死 ⇒ 两个判据都够不到 ⇒ 会话永不释放」。
+# 这类 bug 的特征是**两段代码各自都对**，只有把「顺序」本身当断言对象才能钉住。
+# 同一测试还断言坏读容忍必须排在分支②之前（否则坏读会被当成「没在放」而掐断播放）。
+ORDERLOG=/tmp/gdmusic_onnow_order.log
+if ! "$NODE" "$R/tools/test-onnow-order.js" >"$ORDERLOG" 2>&1; then
+    echo "❌ onNow 分支顺序自检失败："
+    cat "$ORDERLOG"
+    exit 1
+fi
+# 导航自检：钉住「来处槽位被污染成 自己/下游 时也必须能退出去」。
+# 为什么需要它：这个文件历史上三次死循环事故形状完全相同（backPage / settingsBackPage /
+# playerBackPage 各自被污染），症状都是「按了返回但页面不动」——箭头在、点得着、不报错，
+# 极难定位。2026-10-07 把它改成 navDownstream + navOriginOk 的结构性保证后，
+# 这里用**最坏输入**（槽位直接写成非法值）钉住，防止有人日后又改成手写 if 排除。
+NAVLOG=/tmp/gdmusic_nav_selfcheck.log
+if ! "$NODE" "$R/tools/test-nav-loop.js" >"$NAVLOG" 2>&1; then
+    echo "❌ 导航自检失败："
+    cat "$NAVLOG"
+    exit 1
+fi
 
 adb -s "$S" shell "rm -rf $P; mkdir -p $P/bin $P/qml/components $P/qml/pages"
 
